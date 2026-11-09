@@ -9,26 +9,29 @@ import type {
 } from "maplibre-gl"
 import "maplibre-gl/dist/maplibre-gl.css"
 
-import { circleRing, type DeviceLocation, type SearchResult } from "@/lib/geo"
+import { circleRing, isArea, type DeviceLocation, type Place } from "@/lib/geo"
+import { styleFor, styleKey, type MapView } from "@/lib/map-styles"
+import { gibsSignalTiles, passDay, type SarOverlay } from "@/lib/sar"
 
 export type FocusRequest = {
-  target: "device" | "place"
+  target: "device" | "picked" | "sar"
   /** Bump to re-run the same focus request. */
   nonce: number
 }
 
+export type MapViewport = { latitude: number; longitude: number; zoom: number }
+
 type MapCanvasProps = {
   device: DeviceLocation | null
-  place: SearchResult | null
+  /** The place picked in search. Exact spots get a pin; areas are framed. */
+  picked: Place | null
+  sar: SarOverlay | null
+  view: MapView
   theme: "light" | "dark"
   focus: FocusRequest | null
-  /** UI floating over the map that the camera should avoid. */
-  obstructionRef?: React.RefObject<HTMLElement | null>
-}
-
-const STYLES = {
-  light: "https://basemaps.cartocdn.com/gl/positron-gl-style/style.json",
-  dark: "https://basemaps.cartocdn.com/gl/dark-matter-gl-style/style.json",
+  onViewportChange?: (viewport: MapViewport) => void
+  /** Panels floating over the map that the camera should avoid. */
+  obstructionRefs?: React.RefObject<HTMLElement | null>[]
 }
 
 const DEVICE_COLOR = "#0ea5e9" // sky-500
@@ -79,6 +82,111 @@ function syncAccuracyLayer(map: MapLibreMap, device: DeviceLocation | null) {
   })
 }
 
+/* ------------------------------------------------------------------ */
+/* NISAR radar overlay                                                 */
+/* ------------------------------------------------------------------ */
+
+const SAR_SOURCE = "sar-overlay"
+const SAR_LAYER = "sar-overlay"
+const SAR_FOOTPRINT = "sar-footprint"
+
+/** Identity of what's drawn, so opacity changes don't reload the image. */
+function sarKey(sar: SarOverlay | null) {
+  if (!sar) return null
+  if (sar.layer === "movement") {
+    return sar.scene ? `movement:${sar.scene.imageUrl}` : null
+  }
+  return `signal:${passDay(sar.pass)}`
+}
+
+/** Radar goes under the map's labels so place names stay readable. */
+function firstLabelLayer(map: MapLibreMap) {
+  return map.getStyle().layers?.find((l) => l.type === "symbol")?.id
+}
+
+function removeSar(map: MapLibreMap) {
+  for (const id of [SAR_LAYER, `${SAR_FOOTPRINT}-line`]) {
+    if (map.getLayer(id)) map.removeLayer(id)
+  }
+  for (const id of [SAR_SOURCE, SAR_FOOTPRINT]) {
+    if (map.getSource(id)) map.removeSource(id)
+  }
+}
+
+function syncSarLayer(
+  map: MapLibreMap,
+  sar: SarOverlay | null,
+  drawn: { current: string | null }
+) {
+  const key = sarKey(sar)
+  if (key && key === drawn.current && map.getLayer(SAR_LAYER)) {
+    map.setPaintProperty(SAR_LAYER, "raster-opacity", sar!.opacity)
+    return
+  }
+
+  removeSar(map)
+  drawn.current = null
+  if (!sar || !key) return
+
+  const before = firstLabelLayer(map)
+
+  if (sar.layer === "signal") {
+    map.addSource(SAR_SOURCE, {
+      type: "raster",
+      tiles: [gibsSignalTiles(passDay(sar.pass))],
+      tileSize: 256,
+      maxzoom: 13,
+      bounds: sar.pass.bbox,
+      attribution:
+        "NISAR backscatter: NASA/JPL-Caltech &amp; ISRO via NASA GIBS",
+    })
+  } else if (sar.scene) {
+    map.addSource(SAR_SOURCE, {
+      type: "image",
+      url: sar.scene.imageUrl,
+      coordinates: sar.scene.coordinates,
+    })
+  }
+
+  map.addLayer(
+    {
+      id: SAR_LAYER,
+      type: "raster",
+      source: SAR_SOURCE,
+      paint: { "raster-opacity": sar.opacity, "raster-fade-duration": 0 },
+    },
+    before
+  )
+
+  // The pass's footprint, so it's clear where the data stops.
+  map.addSource(SAR_FOOTPRINT, {
+    type: "geojson",
+    data: {
+      type: "Feature",
+      properties: {},
+      geometry: { type: "Polygon", coordinates: [sar.pass.footprint] },
+    },
+  })
+  map.addLayer(
+    {
+      id: `${SAR_FOOTPRINT}-line`,
+      type: "line",
+      source: SAR_FOOTPRINT,
+      paint: {
+        "line-color": "#a855f7", // purple-500
+        "line-width": 1.5,
+        "line-dasharray": [2, 1.5],
+        "line-opacity": 0.9,
+      },
+    },
+    before
+  )
+
+  drawn.current = key
+}
+
+/* ------------------------------------------------------------------ */
+
 function deviceMarkerElement() {
   const el = document.createElement("div")
   el.setAttribute("aria-label", "Your location")
@@ -89,33 +197,116 @@ function deviceMarkerElement() {
   return el
 }
 
-function placeMarkerElement(label: string) {
+function pinElement(label: string) {
   const el = document.createElement("div")
   el.setAttribute("aria-label", label)
+  el.title = label
   el.className = "drop-shadow-md"
   el.innerHTML = `
-    <svg xmlns="http://www.w3.org/2000/svg" width="32" height="40" viewBox="0 0 32 40" aria-hidden="true">
+    <svg xmlns="http://www.w3.org/2000/svg" width="30" height="38" viewBox="0 0 32 40" aria-hidden="true">
       <path d="M16 39s13-12.4 13-23A13 13 0 0 0 3 16c0 10.6 13 23 13 23Z" fill="#ef4444" stroke="#fff" stroke-width="2"/>
       <circle cx="16" cy="16" r="5" fill="#fff"/>
     </svg>`
   return el
 }
 
+/* ------------------------------------------------------------------ */
+/* Camera                                                              */
+/* ------------------------------------------------------------------ */
+
+type Insets = { top: number; right: number; bottom: number; left: number }
+
+/**
+ * How much of each edge the floating panels cover. Each panel is avoided
+ * along the edge it touches where that costs the least space (a wide bar at
+ * the top pushes the view down; a tall column on the left pushes it right).
+ */
+function panelInsets(
+  container: DOMRect,
+  refs: React.RefObject<HTMLElement | null>[] = []
+): Insets {
+  const insets = { top: 40, right: 40, bottom: 40, left: 40 }
+  const gap = 24
+  for (const ref of refs) {
+    const r = ref.current?.getBoundingClientRect()
+    if (!r || r.width === 0 || r.height === 0) continue
+    const options: [keyof Insets, number][] = []
+    if (r.top - container.top < 40)
+      options.push(["top", r.bottom - container.top])
+    if (container.bottom - r.bottom < 40)
+      options.push(["bottom", container.bottom - r.top])
+    if (r.left - container.left < 40)
+      options.push(["left", r.right - container.left])
+    if (container.right - r.right < 40)
+      options.push(["right", container.right - r.left])
+    if (!options.length) continue
+    const [side, size] = options.sort((a, b) => a[1] - b[1])[0]
+    insets[side] = Math.max(insets[side], size + gap)
+  }
+  // Always leave at least ~40% of the map to look at.
+  const fitAxis = (a: "top" | "left", b: "bottom" | "right", total: number) => {
+    const max = total * 0.6
+    if (insets[a] + insets[b] > max) {
+      const k = max / (insets[a] + insets[b])
+      insets[a] *= k
+      insets[b] *= k
+    }
+  }
+  fitAxis("top", "bottom", container.height)
+  fitAxis("left", "right", container.width)
+  return insets
+}
+
+const mercX = (lon: number) => (lon + 180) / 360
+const mercY = (lat: number) => {
+  const s = Math.sin((Math.max(-85, Math.min(85, lat)) * Math.PI) / 180)
+  return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)
+}
+
+/**
+ * Zoom that fits a lon/lat box into the free part of the screen, worked out
+ * directly in Web Mercator. (MapLibre's own fitBounds/cameraForBounds leave
+ * padding on the map that shifts markers on the globe view, and can return
+ * NaN there.)
+ */
+function zoomToFit(
+  [w, s, e, n]: [number, number, number, number],
+  width: number,
+  height: number,
+  maxZoom: number
+) {
+  const dx = Math.max(mercX(e) - mercX(w), 1e-9)
+  const dy = Math.max(mercY(s) - mercY(n), 1e-9)
+  // MapLibre's world is 512 px wide at zoom 0.
+  const zoom = Math.log2(Math.min(width / (dx * 512), height / (dy * 512)))
+  return Math.max(1, Math.min(maxZoom, zoom))
+}
+
 export function MapCanvas({
   device,
-  place,
+  picked,
+  sar,
+  view,
   theme,
   focus,
-  obstructionRef,
+  onViewportChange,
+  obstructionRefs,
 }: MapCanvasProps) {
   const containerRef = React.useRef<HTMLDivElement>(null)
   const mapRef = React.useRef<MapLibreMap | null>(null)
   const libRef = React.useRef<typeof import("maplibre-gl") | null>(null)
   const deviceMarker = React.useRef<MapLibreMarker | null>(null)
-  const placeMarker = React.useRef<MapLibreMarker | null>(null)
+  const pinMarker = React.useRef<MapLibreMarker | null>(null)
   const deviceRef = React.useRef(device)
-  const themeRef = React.useRef(theme)
+  const sarRef = React.useRef(sar)
+  const sarDrawn = React.useRef<string | null>(null)
+  const styleRef = React.useRef({ view, theme })
+  const callbacks = React.useRef({ onViewportChange })
   const [ready, setReady] = React.useState(false)
+
+  React.useEffect(() => {
+    callbacks.current = { onViewportChange }
+  }, [onViewportChange])
 
   // Create the map once.
   React.useEffect(() => {
@@ -129,22 +320,44 @@ export function MapCanvas({
       // by scripts/copy-maplibre-worker.mjs.
       maplibregl.setWorkerUrl("/maplibre-gl-worker.mjs")
 
+      const { view, theme } = styleRef.current
       map = new maplibregl.Map({
         container: containerRef.current,
-        style: STYLES[themeRef.current],
+        style: styleFor(view, theme),
         center: [100, 15],
         zoom: 1.6,
+        maxPitch: 75,
         attributionControl: { compact: true },
       })
-      map.addControl(new maplibregl.NavigationControl(), "bottom-right")
+      map.addControl(
+        new maplibregl.NavigationControl({ visualizePitch: true }),
+        "bottom-right"
+      )
 
       map.on("style.load", () => {
         if (!map) return
         map.setProjection({ type: "globe" })
+        sarDrawn.current = null
+        syncSarLayer(map, sarRef.current, sarDrawn)
         syncAccuracyLayer(map, deviceRef.current)
+      })
+      map.on("moveend", () => {
+        if (!map) return
+        const c = map.getCenter()
+        callbacks.current.onViewportChange?.({
+          latitude: c.lat,
+          longitude: c.lng,
+          zoom: map.getZoom(),
+        })
       })
       map.once("load", () => {
         if (!cancelled) setReady(true)
+      })
+      // NASA's tile server sometimes fails a tile at a swath's edge; that's
+      // just a gap, not an app error.
+      map.on("error", (e) => {
+        if ((e as { sourceId?: string }).sourceId === SAR_SOURCE) return
+        console.error(e.error)
       })
 
       mapRef.current = map
@@ -155,16 +368,56 @@ export function MapCanvas({
       map?.remove()
       mapRef.current = null
       deviceMarker.current = null
-      placeMarker.current = null
+      pinMarker.current = null
     }
   }, [])
 
-  // Swap basemap when the app theme changes.
+  // Swap the base style when the view or theme changes.
   React.useEffect(() => {
-    if (themeRef.current === theme) return
-    themeRef.current = theme
-    mapRef.current?.setStyle(STYLES[theme])
-  }, [theme])
+    const prev = styleRef.current
+    styleRef.current = { view, theme }
+    const map = mapRef.current
+    if (!map || styleKey(prev.view, prev.theme) === styleKey(view, theme)) {
+      return
+    }
+    map.setStyle(styleFor(view, theme))
+
+    if (view === "3d" && prev.view !== "3d") {
+      // Tilt to show terrain and buildings; get close enough to see them.
+      const target = picked ?? device ?? null
+      if (map.getZoom() < 14 && target) {
+        map.flyTo({
+          center: [target.longitude, target.latitude],
+          zoom: 16,
+          pitch: 60,
+          bearing: -20,
+          speed: 1.4,
+        })
+      } else {
+        map.easeTo({ pitch: 60, bearing: -20, duration: 1200 })
+      }
+    } else if (view !== "3d" && prev.view === "3d") {
+      map.easeTo({ pitch: 0, bearing: 0, duration: 800 })
+    }
+    // Only the view/theme switch should trigger this.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [view, theme])
+
+  // Radar overlay.
+  React.useEffect(() => {
+    sarRef.current = sar
+    const map = mapRef.current
+    if (!ready || !map) return
+    // Don't gate on isStyleLoaded(): it's false whenever tiles are still
+    // streaming in (e.g. mid-flight), and the layer would never appear. If
+    // the style really is mid-swap this throws, and the style.load handler
+    // draws it from sarRef instead.
+    try {
+      syncSarLayer(map, sar, sarDrawn)
+    } catch {
+      sarDrawn.current = null
+    }
+  }, [sar, ready])
 
   // Device marker + accuracy circle.
   React.useEffect(() => {
@@ -191,70 +444,75 @@ export function MapCanvas({
     }
   }, [device, ready])
 
-  // Search result pin.
+  // Pin for an exact spot (an address, a building, a hazard event). Areas
+  // like states or cities have no single point worth pinning.
   React.useEffect(() => {
     const map = mapRef.current
     const lib = libRef.current
     if (!ready || !map || !lib) return
-
-    placeMarker.current?.remove()
-    placeMarker.current = null
-    if (place) {
-      placeMarker.current = new lib.Marker({
-        element: placeMarkerElement(place.label),
+    pinMarker.current?.remove()
+    pinMarker.current = null
+    if (picked && !isArea(picked)) {
+      pinMarker.current = new lib.Marker({
+        element: pinElement(picked.name),
         anchor: "bottom",
       })
-        .setLngLat([place.longitude, place.latitude])
+        .setLngLat([picked.longitude, picked.latitude])
         .addTo(map)
     }
-  }, [place, ready])
+  }, [picked, ready])
 
   // Move the camera when asked.
   React.useEffect(() => {
     const map = mapRef.current
-    const lib = libRef.current
-    if (!ready || !map || !lib || !focus) return
+    if (!ready || !map || !focus) return
 
-    // Keep the target clear of the floating panel: it sits on the left on
-    // wide screens and across the top on phones.
-    const padding = { top: 60, right: 60, bottom: 60, left: 60 }
-    const panel = obstructionRef?.current?.getBoundingClientRect()
+    // Make sure no padding is left on the map from anywhere else.
+    map.setPadding({ top: 0, right: 0, bottom: 0, left: 0 })
     const box = map.getContainer().getBoundingClientRect()
-    if (panel && panel.width > 0) {
-      if (panel.width > box.width / 2) padding.top = panel.bottom - box.top + 40
-      else padding.left = panel.right - box.left + 40
+    const insets = panelInsets(box, obstructionRefs)
+    const freeW = box.width - insets.left - insets.right
+    const freeH = box.height - insets.top - insets.bottom
+    // Put the target in the middle of the free area, not the whole screen.
+    const offset: [number, number] = [
+      (insets.left - insets.right) / 2,
+      (insets.top - insets.bottom) / 2,
+    ]
+    const tilt = view === "3d" ? { pitch: 60 } : {}
+
+    const go = (lon: number, lat: number, zoom: number) =>
+      map.flyTo({ center: [lon, lat], zoom, offset, speed: 1.4, ...tilt })
+
+    const frame = (bbox: [number, number, number, number], maxZoom: number) => {
+      const [w, s, e, n] = bbox
+      const lat = (n + s) / 2
+      // Centre in Mercator space so the box sits evenly on screen.
+      const yMid = (mercY(n) + mercY(s)) / 2
+      const latMid =
+        (Math.atan(Math.sinh(Math.PI * (1 - 2 * yMid))) * 180) / Math.PI
+      go(
+        (w + e) / 2,
+        Number.isFinite(latMid) ? latMid : lat,
+        zoomToFit(bbox, freeW, freeH, maxZoom)
+      )
     }
 
     if (focus.target === "device" && device) {
-      const zoom = device.accuracy < 200 ? 16 : device.accuracy < 2000 ? 14 : 12
-      map.flyTo({
-        center: [device.longitude, device.latitude],
-        zoom,
-        padding,
-        speed: 1.4,
-      })
+      go(
+        device.longitude,
+        device.latitude,
+        device.accuracy < 200 ? 16 : device.accuracy < 2000 ? 14 : 12
+      )
+    } else if (focus.target === "sar" && sar) {
+      frame(sar.pass.bbox, 12)
+    } else if (focus.target === "picked" && picked) {
+      if (picked.bbox) frame(picked.bbox, 16)
+      else if (isArea(picked)) go(picked.longitude, picked.latitude, 10)
+      // Hazard events: show the surrounding region.
+      else if (picked.date) go(picked.longitude, picked.latitude, 9)
+      else go(picked.longitude, picked.latitude, Math.max(map.getZoom(), 16))
     }
-
-    if (focus.target === "place" && place) {
-      if (place.bbox) {
-        const [w, s, e, n] = place.bbox
-        map.fitBounds(
-          [
-            [w, s],
-            [e, n],
-          ],
-          { padding, maxZoom: 17, speed: 1.4 }
-        )
-      } else {
-        map.flyTo({
-          center: [place.longitude, place.latitude],
-          zoom: 15,
-          padding,
-          speed: 1.4,
-        })
-      }
-    }
-    // `focus.nonce` is the trigger; device/place are read at that moment.
+    // `focus.nonce` is the trigger; the data is read at that moment.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [focus, ready])
 

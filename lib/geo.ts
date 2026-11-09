@@ -1,6 +1,6 @@
-export type DeviceLocation = {
-  latitude: number
-  longitude: number
+export type LatLng = { latitude: number; longitude: number }
+
+export type DeviceLocation = LatLng & {
   /** Accuracy radius in metres. */
   accuracy: number
   timestamp: number
@@ -11,14 +11,79 @@ export type PlaceName = {
   detail: string | null
 }
 
-export type SearchResult = {
+/** Icon group for a place, mapped to an icon on the client. */
+export type PlaceIcon =
+  | "pin"
+  | "area"
+  | "street"
+  | "building"
+  | "shop"
+  | "food"
+  | "cafe"
+  | "fuel"
+  | "ev"
+  | "health"
+  | "pharmacy"
+  | "worship"
+  | "money"
+  | "education"
+  | "lodging"
+  | "park"
+  | "transit"
+  | "air"
+  | "car"
+  | "police"
+  | "fitness"
+  // Hazard events
+  | "flood"
+  | "landslide"
+  | "quake"
+  | "volcano"
+  | "storm"
+  | "fire"
+
+/** Radar layers (kept here so this file has no other imports). */
+export type SarLayerName = "movement" | "signal"
+
+export type Place = LatLng & {
   id: string
-  label: string
-  detail: string
-  latitude: number
-  longitude: number
-  /** [west, south, east, north] */
+  name: string
+  /** Human label for what it is, e.g. "Shopping mall". */
+  kind: string
+  icon: PlaceIcon
+  /** Short location line, e.g. "Bangsar, Kuala Lumpur". */
+  area: string
+  /** Full readable address. */
+  address: string
+  /** [west, south, east, north] for areas like cities; null for points. */
   bbox: [number, number, number, number] | null
+  /** Hazard events: when it happened (ISO). */
+  date?: string
+  /** Hazard events: the radar layer that shows it. */
+  sarLayer?: SarLayerName
+}
+
+/** Areas (countries, states, cities) are framed on the map, not pinned. */
+export function isArea(place: Place) {
+  return place.icon === "area"
+}
+
+/** A hazard search ("flood", "banjir kelantan") recognised in the text. */
+export type HazardIntent = {
+  hazard: string
+  /** "Flood" */
+  label: string
+  /** Radar layer that shows this hazard. */
+  layer: SarLayerName
+  /** Why that layer helps. */
+  why: string
+  /** The place named in the search, if any ("kelantan"). */
+  near: (LatLng & { name: string; bbox: Place["bbox"] }) | null
+}
+
+export type SearchResponse = {
+  intent: HazardIntent | null
+  places: Place[]
 }
 
 const EARTH_RADIUS_M = 6_371_000
@@ -26,9 +91,21 @@ const EARTH_RADIUS_M = 6_371_000
 const toRad = (deg: number) => (deg * Math.PI) / 180
 const toDeg = (rad: number) => (rad * 180) / Math.PI
 
+/** Great-circle distance between two points, in metres. */
+export function distanceMeters(a: LatLng, b: LatLng) {
+  const dLat = toRad(b.latitude - a.latitude)
+  const dLon = toRad(b.longitude - a.longitude)
+  const h =
+    Math.sin(dLat / 2) ** 2 +
+    Math.cos(toRad(a.latitude)) *
+      Math.cos(toRad(b.latitude)) *
+      Math.sin(dLon / 2) ** 2
+  return 2 * EARTH_RADIUS_M * Math.asin(Math.sqrt(h))
+}
+
 /** A closed polygon ring approximating a circle on the globe. */
 export function circleRing(
-  center: { latitude: number; longitude: number },
+  center: LatLng,
   radiusMeters: number,
   steps = 64
 ): [number, number][] {

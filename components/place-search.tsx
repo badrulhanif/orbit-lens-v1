@@ -1,0 +1,340 @@
+"use client"
+
+import * as React from "react"
+import { LoaderCircleIcon, RadarIcon, SearchIcon, XIcon } from "lucide-react"
+
+import { PlaceIcon } from "@/components/place-icon"
+import { Button } from "@/components/ui/button"
+import {
+  distanceMeters,
+  formatDistance,
+  type LatLng,
+  type Place,
+  type HazardIntent,
+  type SearchResponse,
+} from "@/lib/geo"
+import { cn } from "@/lib/utils"
+
+export type SearchBias = LatLng & { zoom: number }
+
+type PlaceSearchProps = {
+  /** Where to rank results around right now (user or map view). */
+  getBias: () => SearchBias | null
+  /** Used to show "1.2 km" next to suggestions. */
+  origin: LatLng | null
+  onPick: (place: Place) => void
+  onHazard: (intent: HazardIntent) => void
+  onClear: () => void
+  className?: string
+}
+
+function biasParams(bias: SearchBias | null) {
+  if (!bias) return ""
+  return `&lat=${bias.latitude.toFixed(5)}&lon=${bias.longitude.toFixed(5)}&zoom=${Math.round(bias.zoom)}`
+}
+
+/** Bold the part of `text` that matches what was typed. */
+function Highlight({ text, query }: { text: string; query: string }) {
+  const q = query.trim().toLowerCase()
+  const i = q ? text.toLowerCase().indexOf(q) : -1
+  if (i < 0) return <>{text}</>
+  return (
+    <>
+      {text.slice(0, i)}
+      <mark className="bg-transparent font-semibold text-foreground">
+        {text.slice(i, i + q.length)}
+      </mark>
+      {text.slice(i + q.length)}
+    </>
+  )
+}
+
+export function PlaceSearch({
+  getBias,
+  origin,
+  onPick,
+  onHazard,
+  onClear,
+  className,
+}: PlaceSearchProps) {
+  const listId = React.useId()
+  const [value, setValue] = React.useState("")
+  const [data, setData] = React.useState<SearchResponse | null>(null)
+  const [error, setError] = React.useState<string | null>(null)
+  const [loading, setLoading] = React.useState(false)
+  const [open, setOpen] = React.useState(false)
+  const [active, setActive] = React.useState(-1)
+  /** Quick suggestions are down; search runs on Enter instead. */
+  const [needsSubmit, setNeedsSubmit] = React.useState(false)
+  const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
+  const request = React.useRef<AbortController | null>(null)
+  // Answers we've already had, so backspacing or retyping is instant.
+  const cache = React.useRef(new Map<string, SearchResponse>())
+
+  React.useEffect(
+    () => () => {
+      if (timer.current) clearTimeout(timer.current)
+      request.current?.abort()
+    },
+    []
+  )
+
+  // Rows in the dropdown: the "find nearby" action first, then places.
+  const rows: (
+    { type: "intent"; intent: HazardIntent } | { type: "place"; place: Place }
+  )[] = [
+    ...(data?.intent ? [{ type: "intent" as const, intent: data.intent }] : []),
+    ...(data?.places ?? []).map((place) => ({ type: "place" as const, place })),
+  ]
+
+  function show(response: SearchResponse) {
+    setData(response)
+    setError(null)
+    setActive(-1)
+    setOpen(true)
+  }
+
+  function fetchSuggestions(q: string, submit = false) {
+    request.current?.abort()
+    const bias = biasParams(getBias())
+    const key = `${q.toLowerCase()}|${bias}`
+    const hit = cache.current.get(key)
+    if (hit) {
+      setLoading(false)
+      show(hit)
+      return
+    }
+
+    const controller = new AbortController()
+    request.current = controller
+    setLoading(true)
+    fetch(
+      `/api/search?q=${encodeURIComponent(q)}${bias}${submit ? "&submit=1" : ""}`,
+      { signal: controller.signal }
+    )
+      .then(async (res) => {
+        const body = await res.json()
+        if (body?.needsSubmit) {
+          setNeedsSubmit(true)
+          show({ intent: body.intent ?? null, places: [] })
+          return
+        }
+        if (!res.ok) throw new Error(body?.error ?? "Search failed.")
+        const response = body as SearchResponse
+        cache.current.set(key, response)
+        // Enter means "go": jump to the best match right away.
+        const best = response.places[0]
+        if (submit && best && !response.intent) {
+          setData(response)
+          setOpen(false)
+          setValue(best.name)
+          onPick(best)
+          return
+        }
+        setNeedsSubmit(false)
+        show(response)
+      })
+      .catch((err: unknown) => {
+        if (controller.signal.aborted) return
+        setError(err instanceof Error ? err.message : "Search failed.")
+        setOpen(true)
+      })
+      .finally(() => {
+        if (!controller.signal.aborted) setLoading(false)
+      })
+  }
+
+  function onChange(next: string) {
+    setValue(next)
+    if (timer.current) clearTimeout(timer.current)
+    if (next.trim().length < 2) {
+      request.current?.abort()
+      setData(null)
+      setError(null)
+      setLoading(false)
+      setOpen(false)
+      return
+    }
+    timer.current = setTimeout(() => fetchSuggestions(next.trim()), 150)
+  }
+
+  function choose(index: number) {
+    const row = rows[index]
+    if (!row) return
+    setOpen(false)
+    if (row.type === "intent") {
+      onHazard(row.intent)
+    } else {
+      setValue(row.place.name)
+      onPick(row.place)
+    }
+  }
+
+  function clear() {
+    if (timer.current) clearTimeout(timer.current)
+    request.current?.abort()
+    setValue("")
+    setData(null)
+    setError(null)
+    setLoading(false)
+    setOpen(false)
+    onClear()
+  }
+
+  function onKeyDown(event: React.KeyboardEvent) {
+    if (event.key === "ArrowDown" && rows.length) {
+      event.preventDefault()
+      setOpen(true)
+      setActive((i) => (i + 1) % rows.length)
+    } else if (event.key === "ArrowUp" && rows.length) {
+      event.preventDefault()
+      setOpen(true)
+      setActive((i) => (i <= 0 ? rows.length - 1 : i - 1))
+    } else if (event.key === "Enter") {
+      event.preventDefault()
+      const hasPlaces = (data?.places.length ?? 0) > 0
+      if (open && active >= 0) choose(active)
+      else if (needsSubmit && !hasPlaces && value.trim().length >= 2) {
+        if (timer.current) clearTimeout(timer.current)
+        fetchSuggestions(value.trim(), true)
+      } else if (open && rows.length) choose(0)
+      else if (value.trim().length >= 2) fetchSuggestions(value.trim(), true)
+    } else if (event.key === "Escape") {
+      if (open) setOpen(false)
+      else if (value) clear()
+    }
+  }
+
+  const showList = open && (error || data)
+
+  return (
+    <div
+      className={cn(
+        "overflow-hidden rounded-2xl bg-background/90 shadow-lg ring-1 shadow-black/10 ring-foreground/10 backdrop-blur-xl",
+        className
+      )}
+    >
+      <div className="relative flex items-center p-1.5">
+        <SearchIcon className="pointer-events-none absolute left-4 size-4 text-muted-foreground" />
+        <input
+          role="combobox"
+          aria-expanded={Boolean(showList)}
+          aria-controls={listId}
+          aria-autocomplete="list"
+          aria-activedescendant={
+            active >= 0 ? `${listId}-${active}` : undefined
+          }
+          aria-label="Search for a place"
+          value={value}
+          onChange={(event) => onChange(event.target.value)}
+          onKeyDown={onKeyDown}
+          onFocus={() => data && setOpen(true)}
+          onBlur={() => setOpen(false)}
+          placeholder="Search a place, or a hazard like “flood”"
+          autoComplete="off"
+          spellCheck={false}
+          enterKeyHint="search"
+          className="h-10 w-full min-w-0 bg-transparent pr-10 pl-9 text-base outline-none placeholder:text-muted-foreground md:text-sm"
+        />
+        <div className="absolute right-2.5 flex items-center">
+          {loading ? (
+            <LoaderCircleIcon className="mr-1.5 size-4 animate-spin text-muted-foreground" />
+          ) : value ? (
+            <Button
+              type="button"
+              variant="ghost"
+              size="icon-sm"
+              aria-label="Clear search"
+              onClick={clear}
+            >
+              <XIcon />
+            </Button>
+          ) : null}
+        </div>
+      </div>
+
+      {showList && (
+        <div
+          id={listId}
+          role="listbox"
+          aria-label="Suggestions"
+          // Keep focus in the input while clicking an option.
+          onMouseDown={(event) => event.preventDefault()}
+          className="max-h-[50svh] overflow-y-auto border-t p-1.5"
+        >
+          {needsSubmit && !data?.places.length && !error && (
+            <p className="px-2.5 py-2 text-sm text-muted-foreground">
+              Quick suggestions are busy right now. Press{" "}
+              <kbd className="rounded border px-1 font-sans text-xs">Enter</kbd>{" "}
+              to search.
+            </p>
+          )}
+          {error ? (
+            <p className="px-2.5 py-2 text-sm text-destructive">{error}</p>
+          ) : needsSubmit && rows.length === 0 ? null : rows.length === 0 ? (
+            <p className="px-2.5 py-2 text-sm text-muted-foreground">
+              No matches. Try adding a city or state.
+            </p>
+          ) : (
+            rows.map((row, i) => (
+              <div
+                key={row.type === "intent" ? "intent" : row.place.id}
+                id={`${listId}-${i}`}
+                role="option"
+                aria-selected={i === active}
+                onClick={() => choose(i)}
+                onMouseEnter={() => setActive(i)}
+                className={cn(
+                  "flex cursor-pointer items-center gap-3 rounded-lg px-2 py-2",
+                  i === active && "bg-muted"
+                )}
+              >
+                {row.type === "intent" ? (
+                  <>
+                    <span className="grid size-8 shrink-0 place-items-center rounded-full bg-purple-500/10 text-purple-600 dark:text-purple-400 [&_svg]:size-4">
+                      <RadarIcon />
+                    </span>
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm font-medium">
+                        {row.intent.label}: show{" "}
+                        {row.intent.layer === "movement"
+                          ? "Ground movement"
+                          : "Signal quality"}
+                        {row.intent.near
+                          ? ` in ${row.intent.near.name}`
+                          : " here"}
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {row.intent.why}
+                      </span>
+                    </span>
+                  </>
+                ) : (
+                  <>
+                    <PlaceIcon icon={row.place.icon} />
+                    <span className="min-w-0 flex-1">
+                      <span className="block truncate text-sm">
+                        <Highlight text={row.place.name} query={value} />
+                      </span>
+                      <span className="block truncate text-xs text-muted-foreground">
+                        {[row.place.kind, row.place.area]
+                          .filter(Boolean)
+                          .join(" · ")}
+                      </span>
+                    </span>
+                    {/* Distance to a whole state/country isn't meaningful. */}
+                    {origin && row.place.icon !== "area" && (
+                      <span className="shrink-0 text-xs text-muted-foreground tabular-nums">
+                        {formatDistance(distanceMeters(origin, row.place))}
+                      </span>
+                    )}
+                  </>
+                )}
+              </div>
+            ))
+          )}
+        </div>
+      )}
+    </div>
+  )
+}

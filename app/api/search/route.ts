@@ -1,71 +1,107 @@
 import type { NextRequest } from "next/server"
 
-import type { SearchResult } from "@/lib/geo"
-
-type NominatimResult = {
-  place_id: number
-  lat: string
-  lon: string
-  name?: string
-  display_name: string
-  type?: string
-  addresstype?: string
-  /** [south, north, west, east] as strings */
-  boundingbox?: [string, string, string, string]
-}
+import {
+  isArea,
+  type HazardIntent,
+  type LatLng,
+  type Place,
+  type SearchResponse,
+} from "@/lib/geo"
+import {
+  nominatimSearch,
+  photonSearch,
+  PhotonUnavailableError,
+  resolveCentre,
+  type SearchCentre,
+} from "@/lib/server/geocoder"
+import { detectHazard, hazardEvents } from "@/lib/server/hazards"
 
 /**
- * Place search (addresses, cities, states, countries…) via OpenStreetMap's
- * Nominatim. Proxied so we can send the User-Agent their policy requires.
+ * Search box backend.
+ *
+ * - Hazards ("flood", "banjir kelantan", "landslide near Ipoh"): returns
+ *   which NISAR layer shows it, plus recent real events nearby.
+ * - Anything else: place suggestions as you type (Photon), nearby first.
+ *
+ * `submit=1` marks an explicit Enter: if the typeahead service is down we
+ * fall back to Nominatim, which only allows searches like that.
  */
 export async function GET(request: NextRequest) {
-  const q = request.nextUrl.searchParams.get("q")?.trim() ?? ""
+  const params = request.nextUrl.searchParams
+  const q = params.get("q")?.trim().slice(0, 200) ?? ""
+  const submit = params.get("submit") === "1"
   if (q.length < 2) {
-    return Response.json({ error: "Type a place to search." }, { status: 400 })
+    return Response.json({ intent: null, places: [] } satisfies SearchResponse)
   }
 
-  const url = new URL("https://nominatim.openstreetmap.org/search")
-  url.searchParams.set("format", "jsonv2")
-  url.searchParams.set("q", q.slice(0, 200))
-  url.searchParams.set("limit", "6")
-  url.searchParams.set(
-    "accept-language",
-    request.headers.get("accept-language") ?? "en"
-  )
+  const centre = await resolveCentre(params, request.headers)
+  const match = detectHazard(q)
+
+  if (match) {
+    const { hazard, near } = match
+    // "banjir kelantan": find Kelantan first, then events around it.
+    let place: Place | null = null
+    if (near) {
+      // Only uses the Nominatim fallback on Enter (its usage policy).
+      const found = await findPlaces(near, centre, submit, 5).catch(() => [])
+      // "kelantan" means the state, not a street named after it nearby.
+      place = found.find(isArea) ?? found[0] ?? null
+    }
+    const around: LatLng | null = place ?? centre
+    const intent: HazardIntent = {
+      hazard: hazard.key,
+      label: hazard.label,
+      layer: hazard.layer,
+      why: hazard.why,
+      near: place
+        ? {
+            name: place.name,
+            latitude: place.latitude,
+            longitude: place.longitude,
+            bbox: place.bbox,
+          }
+        : null,
+    }
+    const events = await hazardEvents(hazard, around)
+    return ok({ intent, places: events })
+  }
 
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": "OrbitLens/0.1 (location demo)" },
-      signal: AbortSignal.timeout(8000),
-    })
-    if (!res.ok) throw new Error(`Nominatim responded ${res.status}`)
-    const data = (await res.json()) as NominatimResult[]
-
-    const results: SearchResult[] = data.map((r) => {
-      const [first, ...rest] = r.display_name.split(", ")
-      const bb = r.boundingbox?.map(Number)
-      return {
-        id: String(r.place_id),
-        label: r.name || first,
-        detail: (r.name && r.name !== first ? [first, ...rest] : rest).join(
-          ", "
-        ),
-        latitude: Number(r.lat),
-        longitude: Number(r.lon),
-        bbox:
-          bb && bb.every(Number.isFinite)
-            ? [bb[2], bb[0], bb[3], bb[1]] // [west, south, east, north]
-            : null,
-      }
-    })
-
-    return Response.json(results, {
-      headers: { "Cache-Control": "public, max-age=86400" },
-    })
-  } catch {
+    return ok({ intent: null, places: await findPlaces(q, centre, submit) })
+  } catch (error) {
+    if (error instanceof PhotonUnavailableError && !submit) {
+      // Let the UI ask for Enter instead of searching on every keystroke.
+      return Response.json(
+        { intent: null, places: [], needsSubmit: true },
+        { status: 503 }
+      )
+    }
     return Response.json(
       { error: "Search isn't available right now. Try again." },
       { status: 502 }
     )
   }
+}
+
+/** Photon, or Nominatim on an explicit search if Photon is down. */
+async function findPlaces(
+  q: string,
+  centre: SearchCentre | null,
+  submit: boolean,
+  limit?: number
+) {
+  try {
+    return await photonSearch(q, centre, limit)
+  } catch (error) {
+    if (error instanceof PhotonUnavailableError && submit) {
+      return nominatimSearch(q, centre, limit)
+    }
+    throw error
+  }
+}
+
+function ok(body: SearchResponse) {
+  return Response.json(body, {
+    headers: { "Cache-Control": "private, max-age=300" },
+  })
 }
