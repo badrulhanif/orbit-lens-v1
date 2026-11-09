@@ -18,6 +18,7 @@ import { useDeviceLocation } from "@/hooks/use-device-location"
 import { useMapView } from "@/hooks/use-map-view"
 import { useNisar } from "@/hooks/use-nisar"
 import type { HazardIntent, Place } from "@/lib/geo"
+import type { SarCycle } from "@/lib/sar"
 
 // Record the visit (IP goes to the server log only) once per page load.
 let visitLogged = false
@@ -36,9 +37,12 @@ export function OrbitLens() {
   const passNavRef = React.useRef<HTMLDivElement>(null)
   const legendRef = React.useRef<HTMLDivElement>(null)
 
-  const focusOn = React.useCallback((target: FocusRequest["target"]) => {
-    setFocus((prev) => ({ target, nonce: (prev?.nonce ?? 0) + 1 }))
-  }, [])
+  const focusOn = React.useCallback(
+    (target: FocusRequest["target"], bbox?: FocusRequest["bbox"]) => {
+      setFocus((prev) => ({ target, bbox, nonce: (prev?.nonce ?? 0) + 1 }))
+    },
+    []
+  )
 
   const location = useDeviceLocation(
     React.useCallback(() => focusOn("device"), [focusOn])
@@ -57,9 +61,23 @@ export function OrbitLens() {
   const nisar = useNisar({
     getFallbackPoint: React.useCallback(() => positionRef.current, []),
     // Switched on while zoomed out: bring the radar swath into view.
-    onFirstLoad: React.useCallback(() => {
-      if ((viewport.current?.zoom ?? 0) < 6) focusOn("sar")
-    }, [focusOn]),
+    onFirstLoad: React.useCallback(
+      (cycle: SarCycle) => {
+        if ((viewport.current?.zoom ?? 0) >= 6) return
+        // Frame the stitched swaths.
+        const b = cycle.passes.reduce<[number, number, number, number]>(
+          (acc, p) => [
+            Math.min(acc[0], p.bbox[0]),
+            Math.min(acc[1], p.bbox[1]),
+            Math.max(acc[2], p.bbox[2]),
+            Math.max(acc[3], p.bbox[3]),
+          ],
+          [180, 90, -180, -90]
+        )
+        focusOn("area", b)
+      },
+      [focusOn]
+    ),
   })
 
   /** Rank search results around the user, else the area on screen. */

@@ -8,6 +8,9 @@ import type { SarLayerName } from "@/lib/geo"
  *   satellite in between.
  * - "signal": GCOV backscatter. How strong the radar echo is from each patch
  *   of ground (forest, buildings, water all echo differently).
+ *
+ * The map shows a "cycle" at a time: NISAR repeats its orbit every 12 days,
+ * so one cycle's swaths stitch together into one picture of an area.
  */
 export type SarLayer = SarLayerName
 
@@ -22,18 +25,36 @@ export type SarPass = {
   direction: "Ascending" | "Descending" | null
   track: number | null
   provisional: boolean
+  /** 12-day orbit cycle number (for "movement": the later pass's). */
+  cycle?: number
+  frame?: number
   /** Footprint polygon ring, [lon, lat]. */
   footprint: [number, number][]
   /** [west, south, east, north] */
   bbox: [number, number, number, number]
 }
 
-export type SarPassesResponse = {
-  layer: SarLayer
+/** All the swaths over an area from one 12-day cycle. */
+export type SarCycle = {
+  cycle: number
+  direction: "Ascending" | "Descending"
+  /** Earliest / latest dates among its passes (ISO). */
+  start: string
+  end: string
+  provisional: boolean
+  /** Oldest first, so newer swaths draw on top. */
   passes: SarPass[]
 }
 
-/** Where to put the GUNW browse image on the map. */
+export type SarCoverageResponse = {
+  layer: SarLayer
+  /** The area that was searched: [west, south, east, north]. */
+  bbox: [number, number, number, number]
+  /** Newest first. */
+  cycles: SarCycle[]
+}
+
+/** Where to put a GUNW browse image on the map. */
 export type SarScene = {
   imageUrl: string
   /** Corners, [lon, lat]: top-left, top-right, bottom-right, bottom-left. */
@@ -47,12 +68,28 @@ export type SarScene = {
   georeference: "kml" | "footprint"
 }
 
+/** One drawable piece of the radar mosaic. */
+export type SarTile =
+  | {
+      id: string
+      kind: "tiles"
+      /** NASA GIBS tile URL template for one day. */
+      tiles: string
+      /** Only request tiles inside here. */
+      bounds: [number, number, number, number]
+    }
+  | {
+      id: string
+      kind: "image"
+      url: string
+      coordinates: SarScene["coordinates"]
+    }
+
 /** What the map needs to draw the radar overlay. */
 export type SarOverlay = {
   layer: SarLayer
-  pass: SarPass
-  /** Only for "movement" (image overlay). */
-  scene: SarScene | null
+  /** Drawn in order: later ones on top. */
+  pieces: SarTile[]
   opacity: number
 }
 
@@ -68,15 +105,18 @@ const DAY = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 })
 
-export function formatPassDates(pass: SarPass) {
-  const start = new Date(pass.start)
-  const end = new Date(pass.end)
-  if (pass.layer === "signal") return DAY.format(start)
-  const sameYear = start.getUTCFullYear() === end.getUTCFullYear()
-  const from = sameYear
-    ? DAY.format(start).replace(/ \d{4}$/, "")
-    : DAY.format(start)
-  return `${from} → ${DAY.format(end)}`
+/** "7 – 19 Oct 2026", "28 Sept – 10 Oct 2026", "22 Oct 2026". */
+export function formatRange(startIso: string, endIso: string) {
+  const start = new Date(startIso)
+  const end = new Date(endIso)
+  const a = DAY.format(start)
+  const b = DAY.format(end)
+  if (a === b) return a
+  if (start.getUTCFullYear() !== end.getUTCFullYear()) return `${a} – ${b}`
+  const sameMonth = start.getUTCMonth() === end.getUTCMonth()
+  return sameMonth
+    ? `${start.getUTCDate()} – ${b}`
+    : `${a.replace(/ \d{4}$/, "")} – ${b}`
 }
 
 /** UTC calendar day, as GIBS dates its daily layers. */

@@ -3,67 +3,91 @@
 import * as React from "react"
 
 import type { LatLng } from "@/lib/geo"
-import type {
-  SarLayer,
-  SarOverlay,
-  SarPass,
-  SarPassesResponse,
-  SarScene,
+import {
+  gibsSignalTiles,
+  passDay,
+  type SarCoverageResponse,
+  type SarCycle,
+  type SarLayer,
+  type SarOverlay,
+  type SarScene,
+  type SarTile,
 } from "@/lib/sar"
 
-type Passes = {
-  layer: SarLayer
-  point: LatLng | null
-  list: SarPass[]
+type Bbox = [number, number, number, number]
+
+/** What the map reports after each move. */
+export type NisarViewport = LatLng & { zoom: number; bounds: Bbox }
+
+const contains = (outer: Bbox, inner: Bbox) =>
+  inner[0] >= outer[0] &&
+  inner[1] >= outer[1] &&
+  inner[2] <= outer[2] &&
+  inner[3] <= outer[3]
+
+/** The view plus a margin, so small pans don't trigger a new search. */
+function padded([w, s, e, n]: Bbox, factor = 0.3): Bbox {
+  const dx = (e - w) * factor
+  const dy = (n - s) * factor
+  return [w - dx, s - dy, e + dx, n + dy]
 }
 
-type Viewport = LatLng & { zoom: number }
+const around = (p: LatLng, deg: number): Bbox => [
+  p.longitude - deg,
+  p.latitude - deg,
+  p.longitude + deg,
+  p.latitude + deg,
+]
 
-const inside = (p: LatLng, [w, s, e, n]: SarPass["bbox"]) =>
-  p.longitude >= w && p.longitude <= e && p.latitude >= s && p.latitude <= n
-
-/** The first pass on/after `date` (passes are newest first), else newest. */
-function passIndexFor(list: SarPass[], date?: string) {
+/** The cycle covering `date` (or the first after it), else the newest. */
+function cycleIndexFor(cycles: SarCycle[], date?: string, keep?: number) {
+  if (keep != null) {
+    const i = cycles.findIndex((c) => c.cycle === keep)
+    if (i >= 0) return i
+  }
   if (!date) return 0
   let best = 0
-  for (let i = 0; i < list.length; i++) {
-    if (list[i].start >= date) best = i
+  for (let i = 0; i < cycles.length; i++) {
+    if (cycles[i].end >= date) best = i
     else break
   }
   return best
 }
 
 /**
- * NISAR radar layer state. Turn a layer on and it finds the passes over
- * the area on screen, following the map as it moves.
+ * NISAR radar layer state. Switch a layer on and it finds every swath over
+ * the area on screen, groups them by 12-day cycle and stitches the chosen
+ * cycle into one picture. It follows the map as you pan and zoom.
  */
 export function useNisar({
   getFallbackPoint,
   onFirstLoad,
 }: {
-  /** Where to look when the map is zoomed out to the globe. */
+  /** Where to look when the map is zoomed right out. */
   getFallbackPoint: () => LatLng | null
-  /** A layer was just switched on and found data (e.g. to frame it). */
-  onFirstLoad?: (pass: SarPass) => void
+  /** A layer was switched on and found data (e.g. to frame it). */
+  onFirstLoad?: (cycle: SarCycle) => void
 }) {
   const [layer, setLayerState] = React.useState<SarLayer | null>(null)
-  const [passes, setPasses] = React.useState<Passes | null>(null)
+  const [coverage, setCoverage] = React.useState<SarCoverageResponse | null>(
+    null
+  )
+  const [cycleIndex, setCycleIndex] = React.useState(0)
   const [loading, setLoading] = React.useState(false)
   const [error, setError] = React.useState<string | null>(null)
-  const [index, setIndex] = React.useState(0)
-  const [scene, setScene] = React.useState<{
-    id: string
-    scene: SarScene | null
-    error: string | null
-  } | null>(null)
+  const [scenes, setScenes] = React.useState<
+    Record<string, SarScene | "error">
+  >({})
+  const [detail, setDetail] = React.useState<"small" | "full">("small")
 
   const request = React.useRef<AbortController | null>(null)
-  const viewport = React.useRef<Viewport | null>(null)
+  const viewport = React.useRef<NisarViewport | null>(null)
   const autoTimer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
-  const state = React.useRef({ layer, passes, index })
+  const requested = React.useRef(new Set<string>())
+  const latest = React.useRef({ layer, coverage, cycleIndex })
   React.useEffect(() => {
-    state.current = { layer, passes, index }
-  }, [layer, passes, index])
+    latest.current = { layer, coverage, cycleIndex }
+  }, [layer, coverage, cycleIndex])
   const onFirstLoadRef = React.useRef(onFirstLoad)
   React.useEffect(() => {
     onFirstLoadRef.current = onFirstLoad
@@ -71,33 +95,34 @@ export function useNisar({
 
   const load = React.useCallback(
     async (
-      nextLayer: SarLayer,
-      point: LatLng | null,
-      options: { preferDate?: string; first?: boolean } = {}
+      next: SarLayer,
+      area: Bbox,
+      options: { preferDate?: string; keepCycle?: number; first?: boolean } = {}
     ) => {
       request.current?.abort()
       const controller = new AbortController()
       request.current = controller
       setLoading(true)
       setError(null)
-
-      const params = new URLSearchParams({ layer: nextLayer })
-      if (point) {
-        params.set("lat", point.latitude.toFixed(3))
-        params.set("lon", point.longitude.toFixed(3))
-      }
+      const [w, s, e, n] = area.map((v) => v.toFixed(2))
       try {
-        const res = await fetch(`/api/sar/passes?${params}`, {
-          signal: controller.signal,
-        })
+        const res = await fetch(
+          `/api/sar/coverage?layer=${next}&w=${w}&s=${s}&e=${e}&n=${n}`,
+          { signal: controller.signal }
+        )
         const body = await res.json()
         if (!res.ok)
           throw new Error(body?.error ?? "Couldn't reach NISAR data.")
-        const list = (body as SarPassesResponse).passes
-        const i = passIndexFor(list, options.preferDate)
-        setPasses({ layer: nextLayer, point, list })
-        setIndex(i)
-        if (options.first && list[i]) onFirstLoadRef.current?.(list[i])
+        const data = body as SarCoverageResponse
+        const i = cycleIndexFor(
+          data.cycles,
+          options.preferDate,
+          options.keepCycle
+        )
+        setCoverage(data)
+        setCycleIndex(i)
+        if (options.first && data.cycles[i])
+          onFirstLoadRef.current?.(data.cycles[i])
       } catch (err) {
         if (controller.signal.aborted) return
         setError(
@@ -110,11 +135,12 @@ export function useNisar({
     []
   )
 
-  /** Area to check: the map centre, or the fallback when zoomed right out. */
-  const lookPoint = React.useCallback((): LatLng | null => {
+  /** The area to search right now. */
+  const lookArea = React.useCallback((): Bbox | null => {
     const v = viewport.current
-    if (v && v.zoom >= 5) return v
-    return getFallbackPoint() ?? v
+    if (v && v.zoom >= 4) return padded(v.bounds)
+    const p = getFallbackPoint() ?? v
+    return p ? around(p, 3) : null
   }, [getFallbackPoint])
 
   /** Turn a layer on (or off with null). */
@@ -126,36 +152,38 @@ export function useNisar({
         setLoading(false)
         return
       }
-      load(next, lookPoint(), { first: true })
+      const area = lookArea()
+      if (area) load(next, area, { first: true })
+      else setError("Move the map to an area to see radar data.")
     },
-    [load, lookPoint]
+    [load, lookArea]
   )
 
-  /** Show a layer at a specific spot, e.g. a flood event, near its date. */
+  /** Show a layer around a spot, e.g. a flood, on the cycle nearest a date. */
   const showAt = React.useCallback(
     (next: SarLayer, point: LatLng, preferDate?: string) => {
       setLayerState(next)
-      load(next, point, { preferDate })
+      load(next, around(point, 2), { preferDate })
     },
     [load]
   )
 
-  /** Map moved: follow it once the centre leaves the pass on screen. */
+  /** The map moved: follow it once the view leaves the searched area. */
   const onViewportChange = React.useCallback(
-    (v: Viewport) => {
+    (v: NisarViewport) => {
       viewport.current = v
+      setDetail(v.zoom >= 9 ? "full" : "small")
       if (autoTimer.current) clearTimeout(autoTimer.current)
-      const { layer: current, passes: known, index: i } = state.current
-      if (!current || v.zoom < 5) return
-      const shown = known?.layer === current ? known.list[i] : undefined
-      if (shown && inside(v, shown.bbox)) return
-      // Nothing here yet, or nothing at all last time but we've moved on.
-      if (!shown && known?.point && known.list.length === 0) {
-        const dLat = Math.abs(known.point.latitude - v.latitude)
-        const dLon = Math.abs(known.point.longitude - v.longitude)
-        if (dLat < 0.5 && dLon < 0.5) return
-      }
-      autoTimer.current = setTimeout(() => load(current, v), 500)
+      const { layer: current, coverage: known, cycleIndex: i } = latest.current
+      if (!current || v.zoom < 4) return
+      if (known?.layer === current && contains(known.bbox, v.bounds)) return
+      autoTimer.current = setTimeout(
+        () =>
+          load(current, padded(v.bounds), {
+            keepCycle: known?.cycles[i]?.cycle,
+          }),
+        600
+      )
     },
     [load]
   )
@@ -168,46 +196,72 @@ export function useNisar({
     []
   )
 
-  const pass =
-    layer && passes?.layer === layer ? (passes.list[index] ?? null) : null
+  const cycles = coverage && coverage.layer === layer ? coverage.cycles : null
+  const cycle = cycles?.[cycleIndex] ?? null
 
-  // Ground movement is an image overlay; fetch where it goes on the map.
+  // Ground movement swaths are images; find where each one goes.
   React.useEffect(() => {
-    if (!pass || pass.layer !== "movement") return
-    if (scene?.id === pass.id) return
-    const controller = new AbortController()
-    fetch(`/api/sar/scene?granule=${encodeURIComponent(pass.id)}`, {
-      signal: controller.signal,
-    })
-      .then(async (res) => {
-        const body = await res.json()
-        if (!res.ok) throw new Error(body?.error ?? "Couldn't load this image.")
-        setScene({ id: pass.id, scene: body as SarScene, error: null })
-      })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return
-        setScene({
-          id: pass.id,
-          scene: null,
-          error:
-            err instanceof Error ? err.message : "Couldn't load this image.",
+    if (!cycle || layer !== "movement") return
+    for (const pass of cycle.passes) {
+      if (requested.current.has(pass.id)) continue
+      requested.current.add(pass.id)
+      fetch(`/api/sar/scene?granule=${encodeURIComponent(pass.id)}`)
+        .then(async (res) => {
+          if (!res.ok) throw new Error()
+          const scene = (await res.json()) as SarScene
+          setScenes((s) => ({ ...s, [pass.id]: scene }))
         })
-      })
-    return () => controller.abort()
-  }, [pass, scene?.id])
+        .catch(() => {
+          requested.current.delete(pass.id)
+          setScenes((s) => ({ ...s, [pass.id]: "error" }))
+        })
+    }
+  }, [cycle, layer])
 
-  const sceneForPass = pass && scene?.id === pass.id ? scene : null
+  let pieces: SarTile[] = []
+  let waiting = 0
+  if (layer && cycle) {
+    if (layer === "signal") {
+      // NASA GIBS serves one map layer per day; group the swaths by day.
+      const days = new Map<string, Bbox>()
+      for (const p of cycle.passes) {
+        const d = passDay(p)
+        const b = days.get(d)
+        days.set(
+          d,
+          b
+            ? [
+                Math.min(b[0], p.bbox[0]),
+                Math.min(b[1], p.bbox[1]),
+                Math.max(b[2], p.bbox[2]),
+                Math.max(b[3], p.bbox[3]),
+              ]
+            : p.bbox
+        )
+      }
+      pieces = [...days].map(([day, bounds]) => ({
+        id: `signal-${day}`,
+        kind: "tiles",
+        tiles: gibsSignalTiles(day),
+        bounds,
+      }))
+    } else {
+      for (const p of cycle.passes) {
+        const scene = scenes[p.id]
+        if (!scene) waiting++
+        if (!scene || scene === "error") continue
+        pieces.push({
+          id: `${p.id}-${detail}`,
+          kind: "image",
+          url: `${scene.imageUrl}&size=${detail}`,
+          coordinates: scene.coordinates,
+        })
+      }
+    }
+  }
+
   const overlay: SarOverlay | null =
-    layer && pass
-      ? {
-          layer,
-          pass,
-          scene: layer === "movement" ? (sceneForPass?.scene ?? null) : null,
-          opacity: 0.8,
-        }
-      : null
-
-  const list = passes?.layer === layer ? passes.list : null
+    layer && pieces.length ? { layer, pieces, opacity: 0.85 } : null
 
   return {
     layer,
@@ -216,16 +270,12 @@ export function useNisar({
     onViewportChange,
     loading,
     error,
-    passes: list,
-    index,
-    setIndex,
-    pass,
-    imageLoading:
-      layer === "movement" &&
-      !!pass &&
-      (!sceneForPass || (!sceneForPass.scene && !sceneForPass.error)),
-    imageError: sceneForPass?.error ?? null,
-    georeference: sceneForPass?.scene?.georeference ?? null,
+    cycles,
+    cycleIndex,
+    setCycleIndex,
+    cycle,
+    /** Swaths still loading in the current cycle. */
+    waiting,
     overlay,
   }
 }

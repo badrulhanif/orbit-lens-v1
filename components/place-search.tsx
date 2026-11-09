@@ -66,6 +66,8 @@ export function PlaceSearch({
   const [active, setActive] = React.useState(-1)
   /** Quick suggestions are down; search runs on Enter instead. */
   const [needsSubmit, setNeedsSubmit] = React.useState(false)
+  /** Hazard search: real events are loading (they come from slower feeds). */
+  const [eventsLoading, setEventsLoading] = React.useState(false)
   const timer = React.useRef<ReturnType<typeof setTimeout> | null>(null)
   const request = React.useRef<AbortController | null>(null)
   // Answers we've already had, so backspacing or retyping is instant.
@@ -92,6 +94,25 @@ export function PlaceSearch({
     setError(null)
     setActive(-1)
     setOpen(true)
+  }
+
+  /** Recent real events for a hazard, added under the hazard suggestion. */
+  function loadEvents(intent: HazardIntent, cacheKey: string) {
+    const at = intent.near ?? getBias()
+    const where = at
+      ? `&lat=${at.latitude.toFixed(3)}&lon=${at.longitude.toFixed(3)}`
+      : ""
+    setEventsLoading(true)
+    fetch(`/api/hazards?hazard=${intent.hazard}${where}`)
+      .then((res) => (res.ok ? res.json() : { events: [] }))
+      .then(({ events }: { events: Place[] }) => {
+        const withEvents = { intent, places: events }
+        cache.current.set(cacheKey, withEvents)
+        // Only if the user is still looking at this hazard.
+        setData((d) => (d?.intent?.hazard === intent.hazard ? withEvents : d))
+      })
+      .catch(() => {})
+      .finally(() => setEventsLoading(false))
   }
 
   function fetchSuggestions(q: string, submit = false) {
@@ -133,6 +154,7 @@ export function PlaceSearch({
         }
         setNeedsSubmit(false)
         show(response)
+        if (response.intent) loadEvents(response.intent, key)
       })
       .catch((err: unknown) => {
         if (controller.signal.aborted) return
@@ -260,8 +282,14 @@ export function PlaceSearch({
           aria-label="Suggestions"
           // Keep focus in the input while clicking an option.
           onMouseDown={(event) => event.preventDefault()}
-          className="max-h-[50svh] overflow-y-auto border-t p-1.5"
+          className="flex max-h-[50svh] flex-col overflow-y-auto border-t p-1.5"
         >
+          {eventsLoading && data?.intent && !data.places.length && (
+            <p className="order-last flex items-center gap-2 px-2.5 py-2 text-xs text-muted-foreground">
+              <LoaderCircleIcon className="size-3.5 animate-spin" />
+              Loading recent {data.intent.label.toLowerCase()} events…
+            </p>
+          )}
           {needsSubmit && !data?.places.length && !error && (
             <p className="px-2.5 py-2 text-sm text-muted-foreground">
               Quick suggestions are busy right now. Press{" "}

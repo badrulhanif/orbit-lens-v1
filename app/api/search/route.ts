@@ -1,30 +1,33 @@
 import type { NextRequest } from "next/server"
 
 import {
+  distanceMeters,
   isArea,
   type HazardIntent,
-  type LatLng,
   type Place,
   type SearchResponse,
 } from "@/lib/geo"
+import { searchGazetteer } from "@/lib/server/gazetteer"
 import {
   nominatimSearch,
   photonSearch,
   PhotonUnavailableError,
   resolveCentre,
-  type SearchCentre,
 } from "@/lib/server/geocoder"
-import { detectHazard, hazardEvents } from "@/lib/server/hazards"
+import { detectHazard } from "@/lib/server/hazards"
 
 /**
  * Search box backend.
  *
- * - Hazards ("flood", "banjir kelantan", "landslide near Ipoh"): returns
- *   which NISAR layer shows it, plus recent real events nearby.
- * - Anything else: place suggestions as you type (Photon), nearby first.
+ * Places: an offline gazetteer answers instantly and ranks the way people
+ * expect (country → state → district → town → kampung, nearest first among
+ * equals). Photon adds buildings, malls and streets when it's reachable.
  *
- * `submit=1` marks an explicit Enter: if the typeahead service is down we
- * fall back to Nominatim, which only allows searches like that.
+ * Hazards ("flood", "banjir kelantan"): returns which NISAR layer shows it;
+ * the client then loads recent real events from /api/hazards.
+ *
+ * `submit=1` marks an explicit Enter: if nothing is found locally and Photon
+ * is down, we ask Nominatim (which only allows searches like that).
  */
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams
@@ -35,19 +38,12 @@ export async function GET(request: NextRequest) {
   }
 
   const centre = await resolveCentre(params, request.headers)
-  const match = detectHazard(q)
 
+  const match = detectHazard(q)
   if (match) {
     const { hazard, near } = match
-    // "banjir kelantan": find Kelantan first, then events around it.
-    let place: Place | null = null
-    if (near) {
-      // Only uses the Nominatim fallback on Enter (its usage policy).
-      const found = await findPlaces(near, centre, submit, 5).catch(() => [])
-      // "kelantan" means the state, not a street named after it nearby.
-      place = found.find(isArea) ?? found[0] ?? null
-    }
-    const around: LatLng | null = place ?? centre
+    // "banjir kelantan" → Kelantan (the state, not a street named after it).
+    const place = near ? (await searchGazetteer(near, centre, 1))[0] : null
     const intent: HazardIntent = {
       hazard: hazard.key,
       label: hazard.label,
@@ -62,42 +58,55 @@ export async function GET(request: NextRequest) {
           }
         : null,
     }
-    const events = await hazardEvents(hazard, around)
-    return ok({ intent, places: events })
+    return ok({ intent, places: [] })
   }
 
+  const local = await searchGazetteer(q, centre, 8)
+  const strong = local.filter((p) => p.match < 2)
+  const weak = local.filter((p) => p.match === 2)
+
+  // Buildings, malls, streets… from Photon (skipped instantly while down).
+  let pois: Place[] = []
+  let photonDown = false
   try {
-    return ok({ intent: null, places: await findPlaces(q, centre, submit) })
+    pois = (await photonSearch(q, centre, 6)).filter((p) => !isArea(p))
   } catch (error) {
-    if (error instanceof PhotonUnavailableError && !submit) {
-      // Let the UI ask for Enter instead of searching on every keystroke.
-      return Response.json(
-        { intent: null, places: [], needsSubmit: true },
-        { status: 503 }
-      )
-    }
+    photonDown = error instanceof PhotonUnavailableError
+  }
+  if (photonDown && submit && strong.length === 0) {
+    pois = await nominatimSearch(q, centre, 6).catch(() => [])
+  }
+
+  // Names that match well first, then specific spots, then loose matches.
+  const merged: Place[] = []
+  for (const p of [...strong, ...pois, ...weak]) {
+    const dupe = merged.some(
+      (m) =>
+        m.name.toLowerCase() === p.name.toLowerCase() &&
+        distanceMeters(m, p) < 2_000
+    )
+    if (!dupe) merged.push(p)
+    if (merged.length >= 8) break
+  }
+
+  if (merged.length === 0 && photonDown && !submit) {
+    // Not in the offline index; the online search needs an explicit Enter.
     return Response.json(
-      { error: "Search isn't available right now. Try again." },
-      { status: 502 }
+      { intent: null, places: [], needsSubmit: true },
+      { status: 503 }
     )
   }
-}
 
-/** Photon, or Nominatim on an explicit search if Photon is down. */
-async function findPlaces(
-  q: string,
-  centre: SearchCentre | null,
-  submit: boolean,
-  limit?: number
-) {
-  try {
-    return await photonSearch(q, centre, limit)
-  } catch (error) {
-    if (error instanceof PhotonUnavailableError && submit) {
-      return nominatimSearch(q, centre, limit)
-    }
-    throw error
-  }
+  return ok({
+    intent: null,
+    // Strip internal ranking fields.
+    places: merged.map((p) => {
+      const place = { ...p } as Place & { match?: number; rank?: number }
+      delete place.match
+      delete place.rank
+      return place
+    }),
+  })
 }
 
 function ok(body: SearchResponse) {

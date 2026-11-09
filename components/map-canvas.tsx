@@ -11,15 +11,23 @@ import "maplibre-gl/dist/maplibre-gl.css"
 
 import { circleRing, isArea, type DeviceLocation, type Place } from "@/lib/geo"
 import { styleFor, styleKey, type MapView } from "@/lib/map-styles"
-import { gibsSignalTiles, passDay, type SarOverlay } from "@/lib/sar"
+import type { SarOverlay } from "@/lib/sar"
 
 export type FocusRequest = {
-  target: "device" | "picked" | "sar"
+  target: "device" | "picked" | "area"
   /** Bump to re-run the same focus request. */
   nonce: number
+  /** For "area": [west, south, east, north] to frame. */
+  bbox?: [number, number, number, number]
 }
 
-export type MapViewport = { latitude: number; longitude: number; zoom: number }
+export type MapViewport = {
+  latitude: number
+  longitude: number
+  zoom: number
+  /** [west, south, east, north] of what's on screen. */
+  bounds: [number, number, number, number]
+}
 
 type MapCanvasProps = {
   device: DeviceLocation | null
@@ -86,103 +94,66 @@ function syncAccuracyLayer(map: MapLibreMap, device: DeviceLocation | null) {
 /* NISAR radar overlay                                                 */
 /* ------------------------------------------------------------------ */
 
-const SAR_SOURCE = "sar-overlay"
-const SAR_LAYER = "sar-overlay"
-const SAR_FOOTPRINT = "sar-footprint"
-
-/** Identity of what's drawn, so opacity changes don't reload the image. */
-function sarKey(sar: SarOverlay | null) {
-  if (!sar) return null
-  if (sar.layer === "movement") {
-    return sar.scene ? `movement:${sar.scene.imageUrl}` : null
-  }
-  return `signal:${passDay(sar.pass)}`
-}
+const SAR_PREFIX = "sar-"
 
 /** Radar goes under the map's labels so place names stay readable. */
 function firstLabelLayer(map: MapLibreMap) {
   return map.getStyle().layers?.find((l) => l.type === "symbol")?.id
 }
 
-function removeSar(map: MapLibreMap) {
-  for (const id of [SAR_LAYER, `${SAR_FOOTPRINT}-line`]) {
-    if (map.getLayer(id)) map.removeLayer(id)
-  }
-  for (const id of [SAR_SOURCE, SAR_FOOTPRINT]) {
+/** Stable, style-safe id for a piece of the mosaic. */
+const pieceId = (id: string) => SAR_PREFIX + id.replace(/[^A-Za-z0-9_-]/g, "_")
+
+/**
+ * Draw the radar mosaic: each swath (or day of GIBS tiles) is its own
+ * source + layer. Pieces still wanted stay put (no flicker when panning);
+ * pieces no longer wanted are removed; new ones are added on top.
+ */
+function syncSarLayers(map: MapLibreMap, sar: SarOverlay | null) {
+  const wanted = new Map((sar?.pieces ?? []).map((p) => [pieceId(p.id), p]))
+  const existing = (map.getStyle().layers ?? [])
+    .map((l) => l.id)
+    .filter((id) => id.startsWith(SAR_PREFIX))
+
+  for (const id of existing) {
+    if (wanted.has(id)) continue
+    map.removeLayer(id)
     if (map.getSource(id)) map.removeSource(id)
   }
-}
-
-function syncSarLayer(
-  map: MapLibreMap,
-  sar: SarOverlay | null,
-  drawn: { current: string | null }
-) {
-  const key = sarKey(sar)
-  if (key && key === drawn.current && map.getLayer(SAR_LAYER)) {
-    map.setPaintProperty(SAR_LAYER, "raster-opacity", sar!.opacity)
-    return
-  }
-
-  removeSar(map)
-  drawn.current = null
-  if (!sar || !key) return
 
   const before = firstLabelLayer(map)
-
-  if (sar.layer === "signal") {
-    map.addSource(SAR_SOURCE, {
-      type: "raster",
-      tiles: [gibsSignalTiles(passDay(sar.pass))],
-      tileSize: 256,
-      maxzoom: 13,
-      bounds: sar.pass.bbox,
-      attribution:
-        "NISAR backscatter: NASA/JPL-Caltech &amp; ISRO via NASA GIBS",
-    })
-  } else if (sar.scene) {
-    map.addSource(SAR_SOURCE, {
-      type: "image",
-      url: sar.scene.imageUrl,
-      coordinates: sar.scene.coordinates,
-    })
+  for (const [id, piece] of wanted) {
+    if (!map.getSource(id)) {
+      if (piece.kind === "tiles") {
+        map.addSource(id, {
+          type: "raster",
+          tiles: [piece.tiles],
+          tileSize: 256,
+          maxzoom: 13,
+          bounds: piece.bounds,
+          attribution:
+            "NISAR: NASA/JPL-Caltech &amp; ISRO via NASA GIBS / ASF DAAC",
+        })
+      } else {
+        map.addSource(id, {
+          type: "image",
+          url: piece.url,
+          coordinates: piece.coordinates,
+        })
+      }
+    }
+    if (!map.getLayer(id)) {
+      map.addLayer(
+        {
+          id,
+          type: "raster",
+          source: id,
+          paint: { "raster-opacity": sar!.opacity, "raster-fade-duration": 0 },
+        },
+        before
+      )
+    }
   }
-
-  map.addLayer(
-    {
-      id: SAR_LAYER,
-      type: "raster",
-      source: SAR_SOURCE,
-      paint: { "raster-opacity": sar.opacity, "raster-fade-duration": 0 },
-    },
-    before
-  )
-
-  // The pass's footprint, so it's clear where the data stops.
-  map.addSource(SAR_FOOTPRINT, {
-    type: "geojson",
-    data: {
-      type: "Feature",
-      properties: {},
-      geometry: { type: "Polygon", coordinates: [sar.pass.footprint] },
-    },
-  })
-  map.addLayer(
-    {
-      id: `${SAR_FOOTPRINT}-line`,
-      type: "line",
-      source: SAR_FOOTPRINT,
-      paint: {
-        "line-color": "#a855f7", // purple-500
-        "line-width": 1.5,
-        "line-dasharray": [2, 1.5],
-        "line-opacity": 0.9,
-      },
-    },
-    before
-  )
-
-  drawn.current = key
 }
 
 /* ------------------------------------------------------------------ */
@@ -299,7 +270,6 @@ export function MapCanvas({
   const pinMarker = React.useRef<MapLibreMarker | null>(null)
   const deviceRef = React.useRef(device)
   const sarRef = React.useRef(sar)
-  const sarDrawn = React.useRef<string | null>(null)
   const styleRef = React.useRef({ view, theme })
   const callbacks = React.useRef({ onViewportChange })
   const [ready, setReady] = React.useState(false)
@@ -327,7 +297,11 @@ export function MapCanvas({
         center: [100, 15],
         zoom: 1.6,
         maxPitch: 75,
-        attributionControl: { compact: true },
+        attributionControl: {
+          compact: true,
+          customAttribution:
+            'Places © <a href="https://www.geonames.org">GeoNames</a> (CC BY 4.0)',
+        },
       })
       map.addControl(
         new maplibregl.NavigationControl({ visualizePitch: true }),
@@ -337,17 +311,25 @@ export function MapCanvas({
       map.on("style.load", () => {
         if (!map) return
         map.setProjection({ type: "globe" })
-        sarDrawn.current = null
-        syncSarLayer(map, sarRef.current, sarDrawn)
+        syncSarLayers(map, sarRef.current)
         syncAccuracyLayer(map, deviceRef.current)
       })
       map.on("moveend", () => {
         if (!map) return
         const c = map.getCenter()
+        const b = map.getBounds()
+        const clamp = (v: number, lo: number, hi: number) =>
+          Math.min(hi, Math.max(lo, v))
         callbacks.current.onViewportChange?.({
           latitude: c.lat,
           longitude: c.lng,
           zoom: map.getZoom(),
+          bounds: [
+            clamp(b.getWest(), -180, 180),
+            clamp(b.getSouth(), -85, 85),
+            clamp(b.getEast(), -180, 180),
+            clamp(b.getNorth(), -85, 85),
+          ],
         })
       })
       map.once("load", () => {
@@ -356,7 +338,8 @@ export function MapCanvas({
       // NASA's tile server sometimes fails a tile at a swath's edge; that's
       // just a gap, not an app error.
       map.on("error", (e) => {
-        if ((e as { sourceId?: string }).sourceId === SAR_SOURCE) return
+        const id = (e as { sourceId?: string }).sourceId
+        if (id?.startsWith(SAR_PREFIX)) return
         console.error(e.error)
       })
 
@@ -413,9 +396,9 @@ export function MapCanvas({
     // the style really is mid-swap this throws, and the style.load handler
     // draws it from sarRef instead.
     try {
-      syncSarLayer(map, sar, sarDrawn)
+      syncSarLayers(map, sar)
     } catch {
-      sarDrawn.current = null
+      // Style mid-swap; style.load redraws from sarRef.
     }
   }, [sar, ready])
 
@@ -503,10 +486,12 @@ export function MapCanvas({
         device.latitude,
         device.accuracy < 200 ? 16 : device.accuracy < 2000 ? 14 : 12
       )
-    } else if (focus.target === "sar" && sar) {
-      frame(sar.pass.bbox, 12)
+    } else if (focus.target === "area" && focus.bbox) {
+      frame(focus.bbox, 12)
     } else if (focus.target === "picked" && picked) {
       if (picked.bbox) frame(picked.bbox, 16)
+      // Gazetteer places say how close to zoom (state 8 … village 14).
+      else if (picked.zoom) go(picked.longitude, picked.latitude, picked.zoom)
       else if (isArea(picked)) go(picked.longitude, picked.latitude, 10)
       // Hazard events: show the surrounding region.
       else if (picked.date) go(picked.longitude, picked.latitude, 9)

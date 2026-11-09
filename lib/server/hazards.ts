@@ -262,9 +262,21 @@ function centreOf(g: EonetGeometry): [number, number] {
   ]
 }
 
-async function eonetEvents(hazard: Hazard, category: string): Promise<Place[]> {
+async function eonetEvents(
+  hazard: Hazard,
+  category: string,
+  centre: LatLng | null
+): Promise<Place[]> {
+  // Only ask for the user's region: the whole-world feed is ~9 MB and slow.
+  // Snapped to a 10° grid so nearby users share the cached answer.
+  let bbox = ""
+  if (centre) {
+    const lon = Math.round(centre.longitude / 10) * 10
+    const lat = Math.round(centre.latitude / 10) * 10
+    bbox = `&bbox=${lon - 30},${Math.min(lat + 25, 90)},${lon + 30},${Math.max(lat - 25, -90)}`
+  }
   const data = await cachedJson<{ events: EonetEvent[] }>(
-    `https://eonet.gsfc.nasa.gov/api/v3/events?category=${category}&status=all&days=365&limit=500`
+    `https://eonet.gsfc.nasa.gov/api/v3/events?category=${category}&status=all&days=365&limit=300${bbox}`
   )
   return data.events
     .filter((e) => e.geometry.length > 0)
@@ -334,7 +346,7 @@ export async function hazardEvents(
   let events: Place[] = []
   try {
     if (source.kind === "eonet")
-      events = await eonetEvents(hazard, source.category)
+      events = await eonetEvents(hazard, source.category, centre)
     else if (centre) events = await usgsQuakes(hazard, centre)
   } catch {
     return []
@@ -349,4 +361,8 @@ export async function hazardEvents(
     .sort((a, b) => a.d - b.d)
     .slice(0, limit)
     .map(({ e }) => e)
+}
+
+export function hazardByKey(key: string) {
+  return HAZARDS.find((h) => h.key === key) ?? null
 }

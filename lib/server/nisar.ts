@@ -1,6 +1,8 @@
 import sharp from "sharp"
 
-import type { SarLayer, SarPass, SarScene } from "@/lib/sar"
+import { gibsHasDay } from "@/lib/server/gibs"
+
+import type { SarCycle, SarLayer, SarPass, SarScene } from "@/lib/sar"
 
 /**
  * NISAR products from the Alaska Satellite Facility (ASF DAAC).
@@ -89,30 +91,135 @@ function toPass(r: AsfResult, layer: SarLayer): SarPass {
   }
 }
 
-/** NISAR passes covering a point, newest first. */
-export async function findPasses(
+/**
+ * Cycle / track / frame from a product name. NISAR repeats its orbit every
+ * 12 days; one "cycle" is one complete pass over the whole planet.
+ *   NISAR_L2_PR_GCOV_033_148_D_087_…      → cycle 33, track 148, frame 87
+ *   NISAR_L2_PR_GUNW_032_112_A_003_033_…  → cycles 32→33, track 112, frame 3
+ */
+function parseName(name: string) {
+  const gunw = name.match(/_GUNW_(\d{3})_(\d{3})_([AD])_(\d{3})_(\d{3})_/)
+  if (gunw) {
+    return { cycle: +gunw[5], track: +gunw[2], dir: gunw[3], frame: +gunw[4] }
+  }
+  const gcov = name.match(/_GCOV_(\d{3})_(\d{3})_([AD])_(\d{3})_/)
+  if (gcov) {
+    return { cycle: +gcov[1], track: +gcov[2], dir: gcov[3], frame: +gcov[4] }
+  }
+  return null
+}
+
+const boxCentre = ([w, s, e, n]: SarPass["bbox"]) => ({
+  latitude: (s + n) / 2,
+  longitude: (w + e) / 2,
+})
+
+const MAX_PASSES_PER_CYCLE = 14
+
+/**
+ * Every NISAR swath overlapping an area, grouped by 12-day cycle so they
+ * can be stitched into one picture. Newest cycle first.
+ */
+export async function findCoverage(
   layer: SarLayer,
-  latitude: number,
-  longitude: number
-): Promise<SarPass[]> {
+  [w, s, e, n]: SarPass["bbox"],
+  centre: { latitude: number; longitude: number }
+): Promise<SarCycle[]> {
+  const since = new Date(Date.now() - 400 * 86400_000)
+    .toISOString()
+    .slice(0, 10)
   const results = await asfSearch({
     processingLevel: PRODUCT_TYPE[layer],
-    intersectsWith: `POINT(${longitude.toFixed(4)} ${latitude.toFixed(4)})`,
-    maxResults: "30",
+    intersectsWith: `POLYGON((${w} ${s},${e} ${s},${e} ${n},${w} ${n},${w} ${s}))`,
+    start: since,
+    maxResults: "2000",
   })
-  return results
-    .filter((r) => r.wkt && NAME_RE.test(r.granuleName))
-    .map((r) => toPass(r, layer))
-    .sort((a, b) => b.start.localeCompare(a.start))
+  // Signal quality is drawn from NASA GIBS tiles, which lag the archive.
+  const hasTiles = layer === "signal" ? await gibsHasDay() : () => true
+
+  // cycle → "track/dir/frame" → pass (one per swath piece)
+  const byCycle = new Map<number, Map<string, SarPass>>()
+  for (const r of results) {
+    if (!r.wkt || !NAME_RE.test(r.granuleName)) continue
+    if (!hasTiles(r.startTime.slice(0, 10))) continue
+    const info = parseName(r.granuleName)
+    if (!info) continue
+    const key = `${info.track}/${info.dir}/${info.frame}`
+    const cycle = byCycle.get(info.cycle) ?? new Map<string, SarPass>()
+    const existing = cycle.get(key)
+    // Reprocessed products: keep the most recent processing.
+    if (!existing || r.granuleName > existing.id) {
+      cycle.set(key, {
+        ...toPass(r, layer),
+        cycle: info.cycle,
+        frame: info.frame,
+      })
+    }
+    byCycle.set(info.cycle, cycle)
+  }
+
+  const covers = (p: SarPass) =>
+    centre.longitude >= p.bbox[0] &&
+    centre.longitude <= p.bbox[2] &&
+    centre.latitude >= p.bbox[1] &&
+    centre.latitude <= p.bbox[3]
+
+  const cycles: SarCycle[] = []
+  for (const [cycle, pieces] of byCycle) {
+    const all = [...pieces.values()]
+    // Ascending and descending passes see the ground from opposite sides;
+    // stitching them together would mix two different views. Use the one
+    // that covers the middle of the screen (else the one with more swaths).
+    const score = (dir: string) => {
+      const list = all.filter((p) => p.direction === dir)
+      return (list.some(covers) ? 1000 : 0) + list.length
+    }
+    const direction =
+      score("Ascending") >= score("Descending") ? "Ascending" : "Descending"
+    const passes = all
+      .filter((p) => p.direction === direction)
+      .map((p) => ({
+        p,
+        d: Math.hypot(
+          boxCentre(p.bbox).latitude - centre.latitude,
+          boxCentre(p.bbox).longitude - centre.longitude
+        ),
+      }))
+      .sort((a, b) => a.d - b.d)
+      .slice(0, MAX_PASSES_PER_CYCLE)
+      .map(({ p }) => p)
+      // Older first, so newer swaths are drawn on top.
+      .sort((a, b) => a.start.localeCompare(b.start))
+    if (!passes.length) continue
+
+    cycles.push({
+      cycle,
+      direction,
+      start: passes.reduce(
+        (m, p) => (p.start < m ? p.start : m),
+        passes[0].start
+      ),
+      end: passes.reduce((m, p) => (p.end > m ? p.end : m), passes[0].end),
+      provisional: passes.some((p) => p.provisional),
+      passes,
+    })
+  }
+  return cycles.sort((a, b) => b.cycle - a.cycle)
 }
 
 /* ------------------------------------------------------------------ */
 /* Browse image + where it goes on the map                             */
 /* ------------------------------------------------------------------ */
 
-type LoadedScene = { png: Buffer; scene: Omit<SarScene, "imageUrl"> }
+type LoadedScene = {
+  png: Buffer
+  /** Downsized copy for zoomed-out views, made on first request. */
+  small?: Promise<Buffer>
+  scene: Omit<SarScene, "imageUrl">
+}
 const sceneCache = new Map<string, Promise<LoadedScene>>()
-const SCENE_CACHE_MAX = 12
+// Browse images are ~2.6 MB; a stitched view holds up to 14 of them.
+const SCENE_CACHE_MAX = 40
 
 export function isGranuleName(name: string) {
   return NAME_RE.test(name)
@@ -140,24 +247,55 @@ async function buildScene(granule: string): Promise<LoadedScene> {
 
   const res = await fetch(browseUrl, { signal: AbortSignal.timeout(30000) })
   if (!res.ok) throw new Error(`Browse image responded ${res.status}`)
-  const png = Buffer.from(await res.arrayBuffer())
+  const original = Buffer.from(await res.arrayBuffer())
 
   const kmlUrl = result.nisar?.additionalUrls?.find((u) =>
     u.endsWith("_LATLON.kml")
   )
   const fromKml = kmlUrl ? await cornersFromKml(kmlUrl) : null
-  if (fromKml) {
-    return { png, scene: { coordinates: fromKml, georeference: "kml" } }
-  }
+  // Corners first (the footprint method needs the original image).
+  const scene: LoadedScene["scene"] = fromKml
+    ? { coordinates: fromKml, georeference: "kml" }
+    : {
+        coordinates: await cornersFromFootprint(
+          original,
+          parseFootprint(result.wkt).bbox
+        ),
+        georeference: "footprint",
+      }
 
-  const { bbox } = parseFootprint(result.wkt)
-  return {
-    png,
-    scene: {
-      coordinates: await cornersFromFootprint(png, bbox),
-      georeference: "footprint",
-    },
+  return { png: await clearBorder(original), scene }
+}
+
+/**
+ * NISAR's previews have a solid dark-purple strip along the edge of each
+ * swath (no data). Side by side in a mosaic those strips look like seams,
+ * so make that exact colour see-through.
+ */
+const BORDER = [47, 19, 55]
+
+async function clearBorder(png: Buffer) {
+  const { data, info } = await sharp(png)
+    .ensureAlpha()
+    .raw()
+    .toBuffer({ resolveWithObject: true })
+  let changed = 0
+  for (let i = 0; i < data.length; i += 4) {
+    if (
+      data[i] === BORDER[0] &&
+      data[i + 1] === BORDER[1] &&
+      data[i + 2] === BORDER[2]
+    ) {
+      data[i + 3] = 0
+      changed++
+    }
   }
+  if (!changed) return png
+  return sharp(data, {
+    raw: { width: info.width, height: info.height, channels: 4 },
+  })
+    .png({ compressionLevel: 9 })
+    .toBuffer()
 }
 
 /** Exact corners from the product's KML (needs an Earthdata token). */
@@ -178,9 +316,10 @@ async function cornersFromKml(url: string) {
     const [n, s, e, w] = ["north", "south", "east", "west"].map(read)
     if ([n, s, e, w].every(Number.isFinite)) return corners(w, s, e, n)
 
-    // Some KMLs use a quad instead: "lon,lat lon,lat lon,lat lon,lat"
-    // counter-clockwise from the bottom-left.
-    const quad = kml.match(/<gx:LatLonQuad>[\s\S]*?<coordinates>([^<]+)</)
+    // NISAR's KMLs use a quad: "lon,lat lon,lat lon,lat lon,lat",
+    // counter-clockwise from the bottom-left. The tag's namespace prefix
+    // varies (gx:, ns0:), so match any.
+    const quad = kml.match(/<(?:\w+:)?LatLonQuad>[\s\S]*?<coordinates>([^<]+)</)
     if (quad) {
       const pts = quad[1]
         .trim()
@@ -245,4 +384,15 @@ function corners(w: number, s: number, e: number, n: number) {
     [e, s],
     [w, s],
   ] as SarScene["coordinates"]
+}
+
+/** The browse image, optionally downsized (zoomed-out views don't need 1400 px). */
+export async function sceneImage(granule: string, size: "small" | "full") {
+  const loaded = await loadScene(granule)
+  if (size === "full") return loaded.png
+  loaded.small ??= sharp(loaded.png)
+    .resize({ width: 560, withoutEnlargement: true })
+    .png({ compressionLevel: 9, palette: true })
+    .toBuffer()
+  return loaded.small
 }

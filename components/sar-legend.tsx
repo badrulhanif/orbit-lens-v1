@@ -61,10 +61,16 @@ export function SarLegend({
           </div>
         </div>
       ) : (
-        <ul className="grid grid-cols-3 gap-2 text-[11px] text-muted-foreground">
-          <Swatch color="#4bbf4b">Vegetation</Swatch>
-          <Swatch color="#c4906e">Open ground, buildings</Swatch>
-          <Swatch color="#0e1a2b">Water, smooth</Swatch>
+        <ul className="grid gap-1.5 text-xs">
+          <Swatch color="#4bbf4b" label="Vegetation">
+            Forest and crops echo strongly
+          </Swatch>
+          <Swatch color="#c4906e" label="Open land">
+            Bare ground, buildings, plantations
+          </Swatch>
+          <Swatch color="#0e1a2b" label="Water">
+            Rivers, sea and flood water look dark
+          </Swatch>
         </ul>
       )}
 
@@ -92,18 +98,23 @@ export function SarLegend({
 
 function Swatch({
   color,
+  label,
   children,
 }: {
   color: string
+  label: string
   children: React.ReactNode
 }) {
   return (
-    <li className="flex items-start gap-1.5">
+    <li className="flex items-center gap-2.5">
       <span
-        className="mt-0.5 size-2.5 shrink-0 rounded-sm ring-1 ring-foreground/15"
+        className="size-3.5 shrink-0 rounded ring-1 ring-foreground/15"
         style={{ background: color }}
       />
-      <span className="leading-tight">{children}</span>
+      <span className="w-20 shrink-0 font-medium">{label}</span>
+      <span className="min-w-0 text-[11px] leading-snug text-muted-foreground">
+        {children}
+      </span>
     </li>
   )
 }

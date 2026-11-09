@@ -1,5 +1,6 @@
 import type { NextRequest } from "next/server"
 
+import { hazardByKey, hazardEvents } from "@/lib/server/hazards"
 import { clientIp, locateRequest } from "@/lib/server/ip-location"
 
 /**
@@ -21,6 +22,11 @@ export async function POST(request: NextRequest) {
       referer: request.headers.get("referer"),
     })
   )
+
+  // Warm the flood feed for this region in the background, so a "flood"
+  // search later answers instantly (NASA's feed takes a few seconds).
+  const flood = hazardByKey("flood")
+  if (flood && info) void hazardEvents(flood, info).catch(() => {})
 
   return new Response(null, { status: 204 })
 }
