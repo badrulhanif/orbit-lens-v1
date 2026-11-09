@@ -1,10 +1,9 @@
 import { distanceMeters, type LatLng, type Place } from "@/lib/geo"
 import { locateRequest } from "@/lib/server/ip-location"
 import { describeKind, iconFor, isNoise, joinUnique } from "@/lib/server/places"
+import { fetchJson, TtlCache, validLatLng } from "@/lib/server/util"
 
-const USER_AGENT = "OrbitLens/0.1 (location demo)"
-
-export type SearchCentre = LatLng & {
+type SearchCentre = LatLng & {
   /** How local the bias should be (map-style zoom). */
   zoom: number
 }
@@ -20,14 +19,7 @@ export async function resolveCentre(
   const lat = Number(params.get("lat"))
   const lon = Number(params.get("lon"))
   const zoom = Number(params.get("zoom"))
-  if (
-    params.has("lat") &&
-    params.has("lon") &&
-    Number.isFinite(lat) &&
-    Number.isFinite(lon) &&
-    Math.abs(lat) <= 90 &&
-    Math.abs(lon) <= 180
-  ) {
+  if (params.has("lat") && params.has("lon") && validLatLng(lat, lon)) {
     return {
       latitude: lat,
       longitude: lon,
@@ -108,10 +100,8 @@ function photonToPlace(f: PhotonFeature): PhotonPlace | null {
   }
 }
 
-/** Small in-memory cache so repeated keystrokes/queries are instant. */
-const photonCache = new Map<string, { at: number; data: PhotonFeature[] }>()
-const PHOTON_TTL_MS = 30 * 60 * 1000
-const PHOTON_CACHE_MAX = 1000
+/** So repeated keystrokes/queries are instant. */
+const photonCache = new TtlCache<PhotonFeature[]>(1000, 30 * 60_000)
 
 /** Thrown when the typeahead service can't be reached. */
 export class PhotonUnavailableError extends Error {}
@@ -120,35 +110,22 @@ export class PhotonUnavailableError extends Error {}
 // keystroke wait for a timeout.
 let photonDownUntil = 0
 
-async function fetchPhoton(url: URL): Promise<PhotonFeature[]> {
-  const key = url.toString()
-  const hit = photonCache.get(key)
-  if (hit && Date.now() - hit.at < PHOTON_TTL_MS) return hit.data
-  if (Date.now() < photonDownUntil) {
-    throw new PhotonUnavailableError("Photon is unavailable")
-  }
-
-  let features: PhotonFeature[]
-  try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(4000),
-    })
-    if (!res.ok) throw new Error(`Photon responded ${res.status}`)
-    features = ((await res.json()) as { features: PhotonFeature[] }).features
-  } catch (error) {
-    photonDownUntil = Date.now() + 60_000
-    throw new PhotonUnavailableError(
-      error instanceof Error ? error.message : "Photon is unavailable"
-    )
-  }
-
-  if (photonCache.size >= PHOTON_CACHE_MAX) {
-    // Drop the oldest entry (Maps keep insertion order).
-    photonCache.delete(photonCache.keys().next().value!)
-  }
-  photonCache.set(key, { at: Date.now(), data: features })
-  return features
+function fetchPhoton(url: URL): Promise<PhotonFeature[]> {
+  return photonCache.get(url.toString(), async () => {
+    if (Date.now() < photonDownUntil) {
+      throw new PhotonUnavailableError("Photon is unavailable")
+    }
+    try {
+      return (
+        await fetchJson<{ features: PhotonFeature[] }>(url, { timeoutMs: 4000 })
+      ).features
+    } catch (error) {
+      photonDownUntil = Date.now() + 60_000
+      throw new PhotonUnavailableError(
+        error instanceof Error ? error.message : "Photon is unavailable"
+      )
+    }
+  })
 }
 
 function photonUrl(
@@ -397,12 +374,7 @@ export async function nominatimSearch(
     )
   }
 
-  const res = await fetch(url, {
-    headers: { "User-Agent": USER_AGENT },
-    signal: AbortSignal.timeout(8000),
-  })
-  if (!res.ok) throw new Error(`Nominatim responded ${res.status}`)
-  const data = (await res.json()) as NominatimResult[]
+  const data = await fetchJson<NominatimResult[]>(url, { timeoutMs: 8000 })
   return data
     .filter((r) => !isNoise(r.category, r.type))
     .map(nominatimToPlace)

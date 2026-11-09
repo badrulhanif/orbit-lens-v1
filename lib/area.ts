@@ -43,22 +43,48 @@ export type HistoryEvent = LatLng & {
   date: string | null
   /** Short detail, e.g. "M5.9 · 12 km deep" or a USGS place line. */
   detail: string | null
-  source: "Wikipedia" | "Wikidata" | "USGS" | "GDACS" | "NASA EONET"
+  /** What happened, in a sentence or three (impacts, felt reports…). */
+  description?: string | null
+  source: "Wikipedia" | "Wikidata" | "USGS" | "GDACS" | "NASA EONET" | "JKM"
   url: string | null
-  /** Inside the chosen area (else it's in the surrounding margin). */
-  inside: boolean
+  /** At sea (inside state waters but more than ~3 km from land). */
+  offshore?: boolean
+  /**
+   * Records that have no point inside the area, so aren't on the map:
+   *  - "state": a state-wide record (major floods from Wikipedia)
+   *  - "reported": the source lists impacts here, but its point is elsewhere
+   */
+  scope?: "site" | "state" | "reported"
+  /** Happening now (an open JKM relief centre). */
+  live?: boolean
+  /** Reported impacts by place (GDACS floods): displaced, deaths… */
+  impacts?: Impact[]
   /** Only a rough, city-level location is known. */
   approximate?: boolean
   /** Affected area outline, when the source gives one (GDACS floods). */
   outline?: [number, number][] | null
 }
 
+export type Impact = { kind: string; value: number; region: string }
+
+/** A MetMalaysia warning, cut down to the parts about this area. */
+export type Warning = {
+  id: string
+  title: string
+  issued: string
+  validFrom: string | null
+  validTo: string | null
+  text: string
+}
+
 export type AreaHistory = {
   /** The chosen area. */
   bbox: Bbox
-  /** Area plus margin that was searched for "nearby". */
+  /** Area plus margin that was searched. */
   searched: Bbox
   events: HistoryEvent[]
+  /** Active MetMalaysia warnings mentioning the area. */
+  warnings: Warning[]
   /** Which sources answered (some may be down). */
   sources: { name: string; ok: boolean }[]
 }
@@ -101,9 +127,76 @@ export function formatEventDate(iso: string | null) {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return "Date unknown"
   return new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
+    // "YYYY-MM": only the month is known.
+    day: iso.length > 7 ? "numeric" : undefined,
     month: "short",
     year: "numeric",
     timeZone: "UTC",
   }).format(d)
+}
+
+/** How precisely an event's location is known (shown as a badge). */
+export function precisionOf(e: HistoryEvent): {
+  label: string
+  tone: "good" | "fair" | "rough"
+  hint: string
+} {
+  if (e.scope === "state")
+    return {
+      label: "State-wide",
+      tone: "rough",
+      hint: "Affected the state; no single location",
+    }
+  if (e.scope === "reported")
+    return {
+      label: "Reported here",
+      tone: "fair",
+      hint: "The source lists impacts in this area; its map point is elsewhere",
+    }
+  if (e.source === "JKM")
+    return {
+      label: "Relief centre",
+      tone: "good",
+      hint: "Exact location of an open evacuation centre (JKM); the affected area is nearby",
+    }
+  if (e.approximate)
+    return {
+      label: "Approximate",
+      tone: "rough",
+      hint: "Only a rough location is known",
+    }
+  if (e.source === "USGS")
+    return {
+      label: "Epicentre",
+      tone: "good",
+      hint: "Measured earthquake epicentre",
+    }
+  if (e.source === "GDACS" || e.source === "NASA EONET")
+    return {
+      label: "Reported area",
+      tone: "fair",
+      hint: "Where the flood was reported; not its full extent",
+    }
+  return {
+    label: "Exact site",
+    tone: "good",
+    hint: "Named site with precise coordinates",
+  }
+}
+
+/** What each history source covers, for data-quality notes. */
+export const SOURCE_COVERAGE = [
+  "Earthquakes: USGS, magnitude 3.5+, since 1970",
+  "Floods: GDACS reports from 2025; major floods from Wikipedia since 1971 (state-wide)",
+  "Landslides and other events: named on Wikipedia / Wikidata",
+  "Happening now: JKM relief centres open today; MetMalaysia warnings in force",
+]
+
+/** Query string for an area (+ its boundary, so results stay inside it). */
+export function areaQuery(bbox: Bbox, boundaryKey?: string | null) {
+  const [w, s, e, n] = bbox.map((v) => v.toFixed(4))
+  return (
+    `w=${w}&s=${s}&e=${e}&n=${n}` +
+    (boundaryKey ? `&boundary=${encodeURIComponent(boundaryKey)}` : "")
+  )
 }

@@ -3,8 +3,13 @@
 import * as React from "react"
 import { useTheme } from "next-themes"
 
+import { ChangeLegend, type AnalysisOverlay } from "@/components/analysis-card"
 import { AreaPanel } from "@/components/area-panel"
-import { LocationCard } from "@/components/location-card"
+import { CaseStudies } from "@/components/case-studies"
+import {
+  DataInfoContext,
+  DataSourcesDialog,
+} from "@/components/data-sources-dialog"
 import { LocationConsentDialog } from "@/components/location-consent-dialog"
 import {
   MapCanvas,
@@ -13,6 +18,7 @@ import {
 } from "@/components/map-canvas"
 import { CompareMap } from "@/components/compare-map"
 import { MapControls } from "@/components/map-controls"
+import { NearbyCard } from "@/components/nearby-card"
 import { PlaceSearch, type SearchBias } from "@/components/place-search"
 import { SarLegend } from "@/components/sar-legend"
 import { SarPassNav } from "@/components/sar-pass-nav"
@@ -20,7 +26,9 @@ import { useArea } from "@/hooks/use-area"
 import { useDeviceLocation } from "@/hooks/use-device-location"
 import { useMapView } from "@/hooks/use-map-view"
 import { useNisar } from "@/hooks/use-nisar"
-import type { HazardIntent, Place } from "@/lib/geo"
+import { appById, type AppId } from "@/lib/apps"
+import { cn } from "@/lib/utils"
+import type { HazardIntent, LatLng, Place } from "@/lib/geo"
 import type { SarCycle } from "@/lib/sar"
 import type { Map as MapLibreMap } from "maplibre-gl"
 
@@ -48,9 +56,8 @@ export function OrbitLens() {
     []
   )
 
-  const location = useDeviceLocation(
-    React.useCallback(() => focusOn("device"), [focusOn])
-  )
+  // Rough location, only for "Nearby me" and ranking search results.
+  const location = useDeviceLocation()
   const positionRef = React.useRef(location.position)
   React.useEffect(() => {
     positionRef.current = location.position
@@ -103,6 +110,44 @@ export function OrbitLens() {
     if (place.sarLayer) nisar.showAt(place.sarLayer, place, place.date)
   }
 
+  // "Nearby me": open the user's district (never their exact spot).
+  const [askLocation, setAskLocation] = React.useState(false)
+  const [nearby, setNearby] = React.useState({
+    busy: false,
+    error: null as string | null,
+  })
+  async function openNearby(p: LatLng) {
+    setNearby({ busy: true, error: null })
+    try {
+      const res = await fetch(
+        `/api/nearby?lat=${p.latitude.toFixed(2)}&lon=${p.longitude.toFixed(2)}`
+      )
+      const { place } = (await res.json()) as { place: Place | null }
+      if (!res.ok || !place) throw new Error()
+      setNearby({ busy: false, error: null })
+      pick(place)
+    } catch {
+      setNearby({
+        busy: false,
+        error: "Couldn't find your district. Try again.",
+      })
+    }
+  }
+  async function nearMe() {
+    if (location.position) return openNearby(location.position)
+    if (!location.allowed) return setAskLocation(true)
+    const p = await location.locate()
+    if (p) openNearby(p)
+  }
+  async function allowLocation() {
+    setAskLocation(false)
+    const p = await location.locate()
+    if (p) openNearby(p)
+  }
+
+  const [dataInfo, setDataInfo] = React.useState(false)
+  const openDataInfo = () => setDataInfo(true)
+
   function showHazard(intent: HazardIntent) {
     if (intent.near) {
       // "banjir kelantan": frame Kelantan and check the radar there.
@@ -131,17 +176,38 @@ export function OrbitLens() {
   const [mainMap, setMainMap] = React.useState<MapLibreMap | null>(null)
   const [split, setSplit] = React.useState(0.5)
   // (The React Compiler memoizes this; no manual useMemo needed.)
+  // Application (flood, forest…) and its change-map overlay.
+  const [app, setApp] = React.useState<AppId>("flood")
+  const [analysis, setAnalysis] = React.useState<AnalysisOverlay | null>(null)
+  function chooseApp(next: AppId) {
+    setApp(next)
+    setAnalysis(null)
+    // Show the radar layer that suits it (top right still toggles it).
+    nisar.setLayer(appById(next).layer)
+  }
+  function showAnalysis(next: AnalysisOverlay | null) {
+    setAnalysis(next)
+    // The change map reads best on the plain map, unless comparing dates.
+    if (next && !nisar.compare) nisar.setLayer(null)
+  }
   const compareControls = {
     nisar,
     split,
     onSplitChange: setSplit,
     onFocus: (bbox: [number, number, number, number]) => focusOn("area", bbox),
+    app,
+    onAppChange: chooseApp,
+    overlay: analysis,
+    onOverlay: showAnalysis,
   }
   const comparing = nisar.compare !== null
 
   // Hazard history for the picked place (the left panel).
   const area = useArea(picked)
   const [selectedEventId, setSelectedEventId] = React.useState<string | null>(
+    null
+  )
+  const [hoveredEventId, setHoveredEventId] = React.useState<string | null>(
     null
   )
   const [searchKey, setSearchKey] = React.useState(0)
@@ -185,121 +251,156 @@ export function OrbitLens() {
   }
 
   function closeArea() {
+    setAnalysis(null)
     setPicked(null)
     setSelectedEventId(null)
     setSearchKey((k) => k + 1)
   }
 
   return (
-    <main className="relative h-svh w-full overflow-hidden bg-background">
-      <MapCanvas
-        device={location.position}
-        picked={picked}
-        events={events}
-        selectedEventId={selectedEventId}
-        onSelectEvent={selectEvent}
-        outline={events.find((e) => e.id === selectedEventId)?.outline ?? null}
-        sar={nisar.overlay}
-        view={view}
-        theme={theme}
-        focus={focus}
-        onViewportChange={(v) => {
-          viewport.current = v
-          nisar.onViewportChange(v)
-        }}
-        obstructionRefs={[searchPanelRef, controlsRef, passNavRef, legendRef]}
-        onMap={setMainMap}
-      />
-
-      {comparing && (
-        <CompareMap
-          mainMap={mainMap}
-          overlay={nisar.compareOverlay}
+    <DataInfoContext.Provider value={openDataInfo}>
+      <main className="relative h-svh w-full overflow-hidden bg-background">
+        <MapCanvas
+          picked={picked}
+          events={events}
+          selectedEventId={selectedEventId}
+          onSelectEvent={selectEvent}
+          hoveredEventId={hoveredEventId}
+          onHoverEvent={setHoveredEventId}
+          outline={
+            events.find((e) => e.id === selectedEventId)?.outline ?? null
+          }
+          sar={nisar.overlay}
           view={view}
           theme={theme}
-          split={split}
-          onSplitChange={setSplit}
-          beforeLabel={nisar.compare?.aLabel ?? ""}
-          afterLabel={nisar.compare?.bLabel ?? ""}
+          focus={focus}
+          onViewportChange={(v) => {
+            viewport.current = v
+            nisar.onViewportChange(v)
+          }}
+          obstructionRefs={[searchPanelRef, controlsRef, passNavRef, legendRef]}
+          onMap={setMainMap}
+          analysis={analysis}
         />
-      )}
 
-      {/* Top-left: search and your location */}
-      <aside className="pointer-events-none absolute inset-x-3 top-3 z-10 sm:inset-x-auto sm:top-4 sm:left-4 sm:w-96">
-        <div
-          ref={searchPanelRef}
-          className="pointer-events-auto flex max-h-[55svh] flex-col gap-2 sm:max-h-[calc(100svh-6rem)]"
-        >
-          <PlaceSearch
-            key={searchKey}
-            className="shrink-0"
-            getBias={getBias}
-            origin={location.position}
-            onPick={pick}
-            onHazard={showHazard}
-            onClear={closeArea}
+        {comparing && (
+          <CompareMap
+            mainMap={mainMap}
+            overlay={nisar.compareOverlay}
+            view={view}
+            theme={theme}
+            split={split}
+            onSplitChange={setSplit}
+            beforeLabel={nisar.compare?.aLabel ?? ""}
+            afterLabel={nisar.compare?.bLabel ?? ""}
           />
-          {picked ? (
-            <AreaPanel
-              key={picked.id}
-              place={picked}
-              area={area}
-              compare={compareControls}
-              selectedEventId={selectedEventId}
-              onSelectEvent={selectEvent}
-              onClose={closeArea}
-            />
-          ) : (
-            <LocationCard
-              className="shrink-0"
-              location={location}
-              onShow={() => focusOn("device")}
-            />
-          )}
-        </div>
-      </aside>
+        )}
 
-      {/*
+        {/* Top-left: search and your location */}
+        <aside className="pointer-events-none absolute inset-x-3 top-3 z-10 sm:inset-x-auto sm:top-4 sm:left-4 sm:w-96">
+          <div
+            ref={searchPanelRef}
+            className="pointer-events-auto flex max-h-[55svh] flex-col gap-2 sm:max-h-[calc(100svh-6rem)]"
+          >
+            <PlaceSearch
+              key={searchKey}
+              className="shrink-0"
+              getBias={getBias}
+              origin={location.position}
+              onPick={pick}
+              onHazard={showHazard}
+              onClear={closeArea}
+            />
+            {picked ? (
+              <AreaPanel
+                key={picked.id}
+                place={picked}
+                area={area}
+                hoveredEventId={hoveredEventId}
+                onHoverEvent={setHoveredEventId}
+                compare={compareControls}
+                selectedEventId={selectedEventId}
+                onSelectEvent={selectEvent}
+                onClose={closeArea}
+              />
+            ) : (
+              <>
+                <NearbyCard
+                  className="shrink-0"
+                  location={location}
+                  busy={nearby.busy}
+                  error={nearby.error}
+                  onNearby={nearMe}
+                />
+                <CaseStudies
+                  className="min-h-0 overflow-y-auto max-sm:hidden"
+                  onOpen={(place, nextApp) => {
+                    pick(place)
+                    chooseApp(nextApp)
+                  }}
+                />
+              </>
+            )}
+          </div>
+        </aside>
+
+        {/*
         Phones: one stack along the bottom (passes, legend, controls).
         Wider screens: the stack dissolves (`contents`) and each piece takes
         its own spot: controls top-right, passes bottom-centre, legend
         bottom-right.
       */}
-      <div className="pointer-events-none absolute right-14 bottom-3 left-3 z-10 flex flex-col gap-2 sm:contents">
-        {radarOn && !comparing && (
+        <div className="pointer-events-none absolute right-14 bottom-3 left-3 z-10 flex flex-col gap-2 sm:contents">
+          {radarOn && !comparing && (
+            <div
+              ref={passNavRef}
+              className="pointer-events-auto sm:absolute sm:bottom-4 sm:left-4 sm:z-10 sm:w-88 lg:left-1/2 lg:-translate-x-1/2"
+            >
+              <SarPassNav nisar={nisar} />
+            </div>
+          )}
+          {(analysis || (radarOn && nisar.layer)) && (
+            <div
+              ref={legendRef}
+              className={cn(
+                "pointer-events-auto sm:absolute sm:right-14 sm:bottom-4 sm:z-10 sm:w-72",
+                // Phones: no room for the key while a place is open.
+                picked && "max-sm:hidden"
+              )}
+            >
+              {analysis ? (
+                <ChangeLegend
+                  overlay={analysis}
+                  onClose={() => setAnalysis(null)}
+                />
+              ) : (
+                nisar.layer && <SarLegend layer={nisar.layer} />
+              )}
+            </div>
+          )}
           <div
-            ref={passNavRef}
-            className="pointer-events-auto sm:absolute sm:bottom-4 sm:left-4 sm:z-10 sm:w-88 lg:left-1/2 lg:-translate-x-1/2"
+            ref={controlsRef}
+            className="pointer-events-auto sm:absolute sm:top-4 sm:right-4 sm:z-10 sm:w-88"
           >
-            <SarPassNav nisar={nisar} />
+            <MapControls
+              view={view}
+              onViewChange={setView}
+              radar={nisar.layer}
+              onRadarChange={nisar.setLayer}
+            />
           </div>
-        )}
-        {radarOn && nisar.layer && (
-          <div
-            ref={legendRef}
-            className="pointer-events-auto sm:absolute sm:right-14 sm:bottom-4 sm:z-10 sm:w-72"
-          >
-            <SarLegend layer={nisar.layer} />
-          </div>
-        )}
-        <div
-          ref={controlsRef}
-          className="pointer-events-auto sm:absolute sm:top-4 sm:right-4 sm:z-10 sm:w-88"
-        >
-          <MapControls
-            view={view}
-            onViewChange={setView}
-            radar={nisar.layer}
-            onRadarChange={nisar.setLayer}
-          />
         </div>
-      </div>
 
-      <LocationConsentDialog
-        open={location.status === "ask"}
-        onAllow={location.enable}
-        onDeny={location.decline}
-      />
-    </main>
+        <LocationConsentDialog
+          open={askLocation}
+          onAllow={allowLocation}
+          onDeny={() => {
+            setAskLocation(false)
+            location.decline()
+          }}
+        />
+        <DataSourcesDialog open={dataInfo} onOpenChange={setDataInfo} />
+      </main>
+    </DataInfoContext.Provider>
   )
 }

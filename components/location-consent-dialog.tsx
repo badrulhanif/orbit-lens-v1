@@ -31,9 +31,10 @@ export function LocationConsentDialog({
           <div className="grid size-12 place-items-center rounded-full bg-sky-500/10 text-sky-600 dark:text-sky-400">
             <MapPinIcon className="size-6" />
           </div>
-          <DialogTitle className="text-lg">Enable location?</DialogTitle>
+          <DialogTitle className="text-lg">Use your location?</DialogTitle>
           <DialogDescription>
-            Allow location access to see where you are on the map.
+            We use it once to find your district and show what happened there.
+            Your exact position isn&apos;t shown on the map or saved.
           </DialogDescription>
         </DialogHeader>
         <DialogFooter className="sm:justify-center">

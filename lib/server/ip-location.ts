@@ -1,5 +1,7 @@
 import { isIP } from "node:net"
 
+import { fetchJson, TtlCache } from "@/lib/server/util"
+
 /** Caller's IP from the proxy headers set by the host. */
 export function clientIp(headers: Headers) {
   const forwarded = headers.get("x-forwarded-for")
@@ -11,7 +13,7 @@ export function clientIp(headers: Headers) {
 }
 
 /** Loopback / LAN addresses can't be geolocated. */
-export function isPrivateIp(ip: string) {
+function isPrivateIp(ip: string) {
   if (isIP(ip) === 4) {
     const [a, b] = ip.split(".").map(Number)
     return (
@@ -32,7 +34,7 @@ export function isPrivateIp(ip: string) {
   )
 }
 
-export type IpLocation = {
+type IpLocation = {
   ip: string | null
   latitude: number
   longitude: number
@@ -51,27 +53,23 @@ type IpWhoResponse = {
   connection?: { isp?: string }
 }
 
-const cache = new Map<string, { value: IpLocation | null; expires: number }>()
-const TTL_MS = 6 * 60 * 60 * 1000
+const cache = new TtlCache<IpLocation | null>(5000, 6 * 60 * 60_000)
 
 /**
  * Rough location for an IP (city level). Pass null to look up this server's
  * own public IP, which is the visitor's IP in local dev. Never throws.
  */
-export async function lookupIp(ip: string | null): Promise<IpLocation | null> {
-  const key = ip ?? "self"
-  const hit = cache.get(key)
-  if (hit && hit.expires > Date.now()) return hit.value
-
-  let value: IpLocation | null = null
-  try {
-    const res = await fetch(
-      `https://ipwho.is/${ip ?? ""}?fields=success,ip,city,region,country,latitude,longitude,connection`,
-      { signal: AbortSignal.timeout(5000) }
-    )
-    const data = (await res.json()) as IpWhoResponse
-    if (data.success && data.latitude != null && data.longitude != null) {
-      value = {
+function lookupIp(ip: string | null): Promise<IpLocation | null> {
+  return cache.get(ip ?? "self", async () => {
+    try {
+      const data = await fetchJson<IpWhoResponse>(
+        `https://ipwho.is/${ip ?? ""}?fields=success,ip,city,region,country,latitude,longitude,connection`,
+        { timeoutMs: 5000 }
+      )
+      if (!data.success || data.latitude == null || data.longitude == null) {
+        return null
+      }
+      return {
         ip: data.ip,
         latitude: data.latitude,
         longitude: data.longitude,
@@ -80,13 +78,11 @@ export async function lookupIp(ip: string | null): Promise<IpLocation | null> {
           .join(", "),
         isp: data.connection?.isp ?? null,
       }
+    } catch {
+      // Unknown location; callers cope.
+      return null
     }
-  } catch {
-    // Leave value null; callers treat the location as unknown.
-  }
-
-  cache.set(key, { value, expires: Date.now() + TTL_MS })
-  return value
+  })
 }
 
 /** The visitor's rough location, from their request headers. */

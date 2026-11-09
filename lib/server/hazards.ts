@@ -5,6 +5,8 @@ import {
   type PlaceIcon,
 } from "@/lib/geo"
 import type { SarLayer } from "@/lib/sar"
+import { eonetRecords, refine } from "@/lib/server/eonet"
+import { fetchJson, TtlCache } from "@/lib/server/util"
 
 /**
  * Hazard searches ("flood", "banjir kelantan", "landslide near Cameron
@@ -184,7 +186,7 @@ function matchHazard(text: string) {
   return HAZARDS.find((h) => h.words.includes(text)) ?? null
 }
 
-export type HazardMatch = { hazard: Hazard; near: string | null }
+type HazardMatch = { hazard: Hazard; near: string | null }
 
 /**
  * "flood", "banjir kelantan", "landslide near Cameron Highlands",
@@ -224,20 +226,6 @@ export function detectHazard(query: string): HazardMatch | null {
 /* Event feeds                                                         */
 /* ------------------------------------------------------------------ */
 
-const cache = new Map<string, { at: number; data: unknown }>()
-const TTL_MS = 30 * 60 * 1000
-
-async function cachedJson<T>(url: string): Promise<T> {
-  const hit = cache.get(url)
-  if (hit && Date.now() - hit.at < TTL_MS) return hit.data as T
-  const res = await fetch(url, { signal: AbortSignal.timeout(10000) })
-  if (!res.ok) throw new Error(`${new URL(url).host} responded ${res.status}`)
-  const data = (await res.json()) as T
-  if (cache.size > 50) cache.delete(cache.keys().next().value!)
-  cache.set(url, { at: Date.now(), data })
-  return data
-}
-
 const DAY = new Intl.DateTimeFormat("en-GB", {
   day: "numeric",
   month: "short",
@@ -245,64 +233,56 @@ const DAY = new Intl.DateTimeFormat("en-GB", {
   timeZone: "UTC",
 })
 
-type EonetGeometry = {
-  date: string
-  type: "Point" | "Polygon"
-  coordinates: [number, number] | [number, number][][]
-}
-type EonetEvent = { id: string; title: string; geometry: EonetGeometry[] }
+const usgsCache = new TtlCache<UsgsFeature[]>(50, 30 * 60_000)
 
-/** A polygon's average vertex: good enough to point at an event. */
-function centreOf(g: EonetGeometry): [number, number] {
-  if (g.type === "Point") return g.coordinates as [number, number]
-  const ring = (g.coordinates as [number, number][][])[0]
-  return [
-    ring.reduce((s, p) => s + p[0], 0) / ring.length,
-    ring.reduce((s, p) => s + p[1], 0) / ring.length,
-  ]
+function toPlace(
+  hazard: Hazard,
+  e: { id: string; latitude: number; longitude: number; date: string }
+) {
+  return {
+    id: e.id,
+    kind: `${hazard.label} · ${DAY.format(new Date(e.date))}`,
+    icon: hazard.icon,
+    latitude: e.latitude,
+    longitude: e.longitude,
+    bbox: null,
+    date: e.date,
+    sarLayer: hazard.layer,
+  }
 }
 
+/** The ~1 year of EONET events around the user, closest first, refined. */
 async function eonetEvents(
   hazard: Hazard,
   category: string,
-  centre: LatLng | null
+  centre: LatLng | null,
+  limit: number
 ): Promise<Place[]> {
-  // Only ask for the user's region: the whole-world feed is ~9 MB and slow.
-  // Snapped to a 10° grid so nearby users share the cached answer.
-  let bbox = ""
-  if (centre) {
-    const lon = Math.round(centre.longitude / 10) * 10
-    const lat = Math.round(centre.latitude / 10) * 10
-    bbox = `&bbox=${lon - 30},${Math.min(lat + 25, 90)},${lon + 30},${Math.max(lat - 25, -90)}`
-  }
-  const data = await cachedJson<{ events: EonetEvent[] }>(
-    `https://eonet.gsfc.nasa.gov/api/v3/events?category=${category}&status=all&days=365&limit=300${bbox}`
-  )
-  return data.events
-    .filter((e) => e.geometry.length > 0)
-    .map((e) => {
-      const latest = e.geometry[e.geometry.length - 1]
-      let [longitude, latitude] = centreOf(latest)
-      // Some GDACS records have latitude/longitude swapped.
-      if (Math.abs(latitude) > 90 && Math.abs(longitude) <= 90) {
-        ;[longitude, latitude] = [latitude, longitude]
-      }
-      // "Flood in Malaysia 1104239" → "Flood in Malaysia"
-      const name = e.title.replace(/\s+\d{5,}$/, "")
-      return {
-        id: `eonet-${e.id}`,
-        name,
-        kind: `${hazard.label} · ${DAY.format(new Date(latest.date))}`,
-        icon: hazard.icon,
-        area: "",
-        address: name,
-        latitude,
-        longitude,
-        bbox: null,
-        date: latest.date,
-        sarLayer: hazard.layer,
-      }
-    })
+  // Only the user's region: the whole-world feed is ~9 MB and slow. Snapped
+  // to a 10° grid so nearby users share the cached answer.
+  const lon = Math.round((centre?.longitude ?? 0) / 10) * 10
+  const lat = Math.round((centre?.latitude ?? 0) / 10) * 10
+  const box: [number, number, number, number] = centre
+    ? [lon - 30, Math.max(lat - 25, -90), lon + 30, Math.min(lat + 25, 90)]
+    : [-180, -90, 180, 90]
+  const since = new Date(Date.now() - 365 * 86400_000)
+    .toISOString()
+    .slice(0, 10)
+  const records = await eonetRecords([category], box, since)
+  // Correcting means a GDACS lookup per event, so only for likely results.
+  const order = (list: typeof records) =>
+    centre
+      ? [...list].sort(
+          (a, b) => distanceMeters(centre, a) - distanceMeters(centre, b)
+        )
+      : [...list].sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""))
+  const refined = order(await refine(order(records).slice(0, limit * 3)))
+  return refined.slice(0, limit).map((e) => ({
+    ...toPlace(hazard, { ...e, date: e.date ?? "" }),
+    name: e.title,
+    area: "",
+    address: e.title,
+  }))
 }
 
 type UsgsFeature = {
@@ -311,32 +291,41 @@ type UsgsFeature = {
   geometry: { coordinates: [number, number, number] }
 }
 
-async function usgsQuakes(hazard: Hazard, centre: LatLng): Promise<Place[]> {
+/** The year's M4.5+ earthquakes within 3,000 km, closest first. */
+async function usgsQuakes(
+  hazard: Hazard,
+  centre: LatLng,
+  limit: number
+): Promise<Place[]> {
   const start = new Date(Date.now() - 365 * 86400_000)
     .toISOString()
     .slice(0, 10)
   const url =
     `https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson` +
-    `&latitude=${centre.latitude.toFixed(2)}&longitude=${centre.longitude.toFixed(2)}` +
+    `&latitude=${centre.latitude.toFixed(1)}&longitude=${centre.longitude.toFixed(1)}` +
     `&maxradiuskm=3000&minmagnitude=4.5&starttime=${start}&orderby=magnitude&limit=50`
-  const data = await cachedJson<{ features: UsgsFeature[] }>(url)
-  return data.features.map((f) => {
-    const [longitude, latitude] = f.geometry.coordinates
-    const date = new Date(f.properties.time).toISOString()
-    return {
-      id: `usgs-${f.id}`,
-      name: `M${f.properties.mag.toFixed(1)} earthquake`,
-      kind: `${hazard.label} · ${DAY.format(new Date(date))}`,
-      icon: hazard.icon,
-      area: f.properties.place ?? "",
-      address: f.properties.place ?? "",
-      latitude,
-      longitude,
-      bbox: null,
-      date,
-      sarLayer: hazard.layer,
-    }
-  })
+  const features = await usgsCache.get(
+    url,
+    async () => (await fetchJson<{ features: UsgsFeature[] }>(url)).features
+  )
+  return features
+    .map((f) => {
+      const [longitude, latitude] = f.geometry.coordinates
+      const place = f.properties.place ?? ""
+      return {
+        ...toPlace(hazard, {
+          id: `usgs-${f.id}`,
+          latitude,
+          longitude,
+          date: new Date(f.properties.time).toISOString(),
+        }),
+        name: `M${f.properties.mag.toFixed(1)} earthquake`,
+        area: place,
+        address: place,
+      }
+    })
+    .sort((a, b) => distanceMeters(centre, a) - distanceMeters(centre, b))
+    .slice(0, limit)
 }
 
 /** Recent real events for a hazard, closest to `centre` first. */
@@ -346,25 +335,17 @@ export async function hazardEvents(
   limit = 6
 ): Promise<Place[]> {
   const source = hazard.source
-  if (!source) return []
-  let events: Place[] = []
   try {
-    if (source.kind === "eonet")
-      events = await eonetEvents(hazard, source.category, centre)
-    else if (centre) events = await usgsQuakes(hazard, centre)
+    if (source?.kind === "eonet") {
+      return await eonetEvents(hazard, source.category, centre, limit)
+    }
+    if (source?.kind === "usgs" && centre) {
+      return await usgsQuakes(hazard, centre, limit)
+    }
   } catch {
-    return []
+    // Feed down: no events rather than an error.
   }
-  if (!centre) {
-    return events
-      .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""))
-      .slice(0, limit)
-  }
-  return events
-    .map((e) => ({ e, d: distanceMeters(centre, e) }))
-    .sort((a, b) => a.d - b.d)
-    .slice(0, limit)
-    .map(({ e }) => e)
+  return []
 }
 
 export function hazardByKey(key: string) {

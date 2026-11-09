@@ -17,7 +17,7 @@ import {
 type Bbox = [number, number, number, number]
 
 /** What the map reports after each move. */
-export type NisarViewport = LatLng & { zoom: number; bounds: Bbox }
+type NisarViewport = LatLng & { zoom: number; bounds: Bbox }
 
 const contains = (outer: Bbox, inner: Bbox) =>
   inner[0] >= outer[0] &&

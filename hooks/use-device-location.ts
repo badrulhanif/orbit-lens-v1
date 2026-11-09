@@ -2,144 +2,116 @@
 
 import * as React from "react"
 
-import type { DeviceLocation } from "@/lib/geo"
+import type { LatLng } from "@/lib/geo"
 
-export type LocationStatus =
-  /** Working out whether we already have permission. */
-  | "checking"
-  /** Need to ask the user (show our prompt). */
-  | "ask"
+type LocationStatus =
+  /** Nothing asked yet. */
+  | "idle"
   | "locating"
   | "ready"
   /** User said no to our prompt. */
   | "off"
   /** Browser has location blocked for this site. */
   | "blocked"
-  /** Anything else: no GPS fix, timeout, unsupported browser. */
+  /** Anything else: no fix, timeout, unsupported browser. */
   | "error"
 
 type State = {
   status: LocationStatus
-  position: DeviceLocation | null
+  /** Rounded to ~1 km: enough to find the district, never the street. */
+  position: LatLng | null
   error: string | null
 }
 
-export function useDeviceLocation(
-  onFirstFix?: (location: DeviceLocation) => void
-) {
+const round = (v: number) => Math.round(v * 100) / 100
+
+/**
+ * The user's rough location, only when asked for ("Nearby me"). One reading,
+ * no tracking, and only a rounded position is ever kept.
+ */
+export function useDeviceLocation() {
   const [state, setState] = React.useState<State>({
-    status: "checking",
+    status: "idle",
     position: null,
     error: null,
   })
-  const watchId = React.useRef<number | null>(null)
-  const onFirstFixRef = React.useRef(onFirstFix)
+  const [allowed, setAllowed] = React.useState(false)
 
-  React.useEffect(() => {
-    onFirstFixRef.current = onFirstFix
-  }, [onFirstFix])
-
-  const stop = React.useCallback(() => {
-    if (watchId.current !== null) {
-      navigator.geolocation.clearWatch(watchId.current)
-      watchId.current = null
-    }
-  }, [])
-
-  /** Starts tracking. Triggers the browser's own permission prompt if needed. */
-  const start = React.useCallback(() => {
-    stop()
-    let hadFix = false
-    setState((s) => ({ ...s, status: "locating", error: null }))
-
-    watchId.current = navigator.geolocation.watchPosition(
-      (pos) => {
-        const position: DeviceLocation = {
-          latitude: pos.coords.latitude,
-          longitude: pos.coords.longitude,
-          accuracy: pos.coords.accuracy,
-          timestamp: pos.timestamp,
-        }
-        setState({ status: "ready", position, error: null })
-        if (!hadFix) {
-          hadFix = true
-          onFirstFixRef.current?.(position)
-        }
-      },
-      (err) => {
-        if (err.code === err.PERMISSION_DENIED) {
-          stop()
-          setState({ status: "blocked", position: null, error: null })
+  const locate = React.useCallback(
+    () =>
+      new Promise<LatLng | null>((resolve) => {
+        if (!("geolocation" in navigator)) {
+          setState({
+            status: "error",
+            position: null,
+            error: "This browser doesn't support location.",
+          })
+          resolve(null)
           return
         }
-        // Keep showing the last good position if we already had one.
-        setState((s) =>
-          s.position
-            ? s
-            : {
-                status: "error",
-                position: null,
-                error:
-                  err.code === err.TIMEOUT
-                    ? "Finding your location took too long."
-                    : "Your device couldn't find its location. Check that location services are on.",
-              }
-        )
-      },
-      { enableHighAccuracy: true, maximumAge: 15_000, timeout: 20_000 }
-    )
-  }, [stop])
-
-  // On load: if the browser already allows location, just go. Otherwise ask.
-  React.useEffect(() => {
-    let cancelled = false
-    let permission: PermissionStatus | null = null
-
-    async function init() {
-      let current: PermissionState = "prompt"
-      try {
-        permission = await navigator.permissions.query({ name: "geolocation" })
-        current = permission.state
-        // If the user changes the site setting while the page is open, follow it.
-        permission.onchange = () => {
-          if (permission?.state === "granted") start()
-          if (permission?.state === "denied") {
-            stop()
-            setState({ status: "blocked", position: null, error: null })
+        setState((s) => ({ ...s, status: "locating", error: null }))
+        navigator.geolocation.getCurrentPosition(
+          (pos) => {
+            const position = {
+              latitude: round(pos.coords.latitude),
+              longitude: round(pos.coords.longitude),
+            }
+            setAllowed(true)
+            setState({ status: "ready", position, error: null })
+            resolve(position)
+          },
+          (err) => {
+            setState({
+              status: err.code === err.PERMISSION_DENIED ? "blocked" : "error",
+              position: null,
+              error:
+                err.code === err.TIMEOUT
+                  ? "Finding your location took too long."
+                  : "Your device couldn't find its location. Check that location services are on.",
+            })
+            resolve(null)
+          },
+          // City-level is all we need: fast, low power.
+          {
+            enableHighAccuracy: false,
+            maximumAge: 10 * 60_000,
+            timeout: 15_000,
           }
+        )
+      }),
+    []
+  )
+
+  // Already allowed for this site: read it quietly (it ranks search
+  // results). Otherwise wait until the user asks.
+  React.useEffect(() => {
+    let permission: PermissionStatus | null = null
+    navigator.permissions
+      ?.query({ name: "geolocation" })
+      .then((p) => {
+        permission = p
+        if (p.state === "granted") {
+          setAllowed(true)
+          locate()
         }
-      } catch {
-        // Permissions API not available — fall back to asking.
-      }
-      if (cancelled) return
-
-      if (!("geolocation" in navigator)) {
-        setState({
-          status: "error",
-          position: null,
-          error: "This browser doesn't support location.",
-        })
-      } else if (current === "granted") {
-        start()
-      } else if (current === "denied") {
-        setState({ status: "blocked", position: null, error: null })
-      } else {
-        setState((s) => ({ ...s, status: "ask" }))
-      }
-    }
-
-    init()
+        p.onchange = () => {
+          setAllowed(p.state === "granted")
+          if (p.state === "denied")
+            setState({ status: "blocked", position: null, error: null })
+        }
+      })
+      .catch(() => {
+        // Permissions API not available: ask when needed.
+      })
     return () => {
-      cancelled = true
       if (permission) permission.onchange = null
-      stop()
     }
-  }, [start, stop])
+  }, [locate])
 
-  const decline = React.useCallback(() => {
-    stop()
-    setState({ status: "off", position: null, error: null })
-  }, [stop])
+  const decline = React.useCallback(
+    () => setState({ status: "off", position: null, error: null }),
+    []
+  )
 
-  return { ...state, enable: start, decline }
+  return { ...state, allowed, locate, decline }
 }

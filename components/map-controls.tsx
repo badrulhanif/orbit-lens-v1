@@ -9,6 +9,7 @@ import {
   SatelliteIcon,
 } from "lucide-react"
 
+import { DataInfoButton } from "@/components/data-sources-dialog"
 import { MAP_VIEWS, type MapView } from "@/lib/map-styles"
 import type { SarLayer } from "@/lib/sar"
 import { cn } from "@/lib/utils"
@@ -74,9 +75,12 @@ export function MapControls({
         className
       )}
     >
-      <p className="px-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-        NISAR radar
-      </p>
+      <div className="flex items-center justify-between px-1">
+        <p className="text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
+          NISAR radar
+        </p>
+        <DataInfoButton iconOnly label="About the data and its sources" />
+      </div>
       <div
         role="group"
         aria-label="NISAR radar layer"

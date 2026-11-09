@@ -1,6 +1,8 @@
 import sharp from "sharp"
 
+import { boxCentre } from "@/lib/area"
 import { gibsHasDay } from "@/lib/server/gibs"
+import { fetchJson, TtlCache } from "@/lib/server/util"
 
 import type { SarCycle, SarLayer, SarPass, SarScene } from "@/lib/sar"
 
@@ -32,26 +34,19 @@ type AsfResult = {
   nisar?: { additionalUrls?: string[] }
 }
 
-const searchCache = new Map<string, { at: number; data: AsfResult[] }>()
-const SEARCH_TTL_MS = 30 * 60 * 1000
+const searches = new TtlCache<AsfResult[]>(200, 30 * 60_000)
 
-async function asfSearch(params: Record<string, string>): Promise<AsfResult[]> {
+function asfSearch(params: Record<string, string>): Promise<AsfResult[]> {
   const url = new URL(ASF_SEARCH)
   url.searchParams.set("dataset", "NISAR")
   url.searchParams.set("output", "jsonlite")
   for (const [k, v] of Object.entries(params)) url.searchParams.set(k, v)
-
-  const key = url.toString()
-  const hit = searchCache.get(key)
-  if (hit && Date.now() - hit.at < SEARCH_TTL_MS) return hit.data
-
-  const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
-  if (!res.ok) throw new Error(`ASF search responded ${res.status}`)
-  const data = ((await res.json()) as { results: AsfResult[] }).results ?? []
-  if (searchCache.size > 200)
-    searchCache.delete(searchCache.keys().next().value!)
-  searchCache.set(key, { at: Date.now(), data })
-  return data
+  return searches.get(
+    url.toString(),
+    async () =>
+      (await fetchJson<{ results?: AsfResult[] }>(url, { timeoutMs: 15_000 }))
+        .results ?? []
+  )
 }
 
 /** "POLYGON ((lon lat, lon lat, …))" → ring + bbox. */
@@ -108,11 +103,6 @@ function parseName(name: string) {
   }
   return null
 }
-
-const boxCentre = ([w, s, e, n]: SarPass["bbox"]) => ({
-  latitude: (s + n) / 2,
-  longitude: (w + e) / 2,
-})
 
 const MAX_PASSES_PER_CYCLE = 14
 
@@ -217,26 +207,15 @@ type LoadedScene = {
   small?: Promise<Buffer>
   scene: Omit<SarScene, "imageUrl">
 }
-const sceneCache = new Map<string, Promise<LoadedScene>>()
 // Browse images are ~2.6 MB; a stitched view holds up to 14 of them.
-const SCENE_CACHE_MAX = 40
+const scenes = new TtlCache<LoadedScene>(40)
 
 export function isGranuleName(name: string) {
   return NAME_RE.test(name)
 }
 
 export function loadScene(granule: string): Promise<LoadedScene> {
-  let pending = sceneCache.get(granule)
-  if (!pending) {
-    pending = buildScene(granule)
-    // Don't keep failures around.
-    pending.catch(() => sceneCache.delete(granule))
-    if (sceneCache.size >= SCENE_CACHE_MAX) {
-      sceneCache.delete(sceneCache.keys().next().value!)
-    }
-    sceneCache.set(granule, pending)
-  }
-  return pending
+  return scenes.get(granule, () => buildScene(granule))
 }
 
 async function buildScene(granule: string): Promise<LoadedScene> {

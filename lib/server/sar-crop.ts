@@ -2,6 +2,7 @@ import sharp from "sharp"
 
 import type { Bbox } from "@/lib/area"
 import { loadScene } from "@/lib/server/nisar"
+import { parseBbox, TtlCache } from "@/lib/server/util"
 
 /**
  * Cut NISAR images down to one area, for side-by-side date comparison.
@@ -14,7 +15,7 @@ import { loadScene } from "@/lib/server/nisar"
 const MAX_SIDE = 560
 
 /** Output size for an area, keeping its real-world proportions. */
-export function cropSize([w, s, e, n]: Bbox) {
+function cropSize([w, s, e, n]: Bbox) {
   const midLat = ((s + n) / 2) * (Math.PI / 180)
   const aspect = ((e - w) * Math.cos(midLat)) / (n - s)
   return aspect >= 1
@@ -22,17 +23,9 @@ export function cropSize([w, s, e, n]: Bbox) {
     : { width: Math.max(120, Math.round(MAX_SIDE * aspect)), height: MAX_SIDE }
 }
 
-const cache = new Map<string, Promise<Buffer>>()
-function cached(key: string, make: () => Promise<Buffer>) {
-  let hit = cache.get(key)
-  if (!hit) {
-    hit = make()
-    hit.catch(() => cache.delete(key))
-    if (cache.size > 80) cache.delete(cache.keys().next().value!)
-    cache.set(key, hit)
-  }
-  return hit
-}
+const crops = new TtlCache<Buffer>(80)
+const cached = (key: string, make: () => Promise<Buffer>) =>
+  crops.get(key, make)
 
 /** A GUNW browse image cut to the area (transparent where it has no data). */
 export function cropMovement(granule: string, bbox: Bbox) {
@@ -94,11 +87,63 @@ export function cropMovement(granule: string, bbox: Bbox) {
   })
 }
 
-/** NISAR backscatter for one day, rendered by NASA GIBS for the area. */
-export function cropSignal(date: string, bbox: Bbox) {
-  return cached(`s|${date}|${bbox.join(",")}`, async () => {
+/**
+ * A GUNW browse image cut to the area at its own pixel size (no resizing).
+ * Coherence is judged from pixel-to-pixel speckle, which enlarging would
+ * fake away (copied pixels look perfectly smooth) and shrinking would blur.
+ */
+export function cropMovementNative(granule: string, bbox: Bbox) {
+  return cached(`mn|${granule}|${bbox.join(",")}`, async () => {
+    const { png, scene } = await loadScene(granule)
+    const [[L, T], , [R, B]] = scene.coordinates
+    const meta = await sharp(png).metadata()
+    const W = meta.width!
+    const H = meta.height!
     const [w, s, e, n] = bbox
-    const { width, height } = cropSize(bbox)
+    const px = (lon: number) => ((lon - L) / (R - L)) * W
+    const py = (lat: number) => ((T - lat) / (T - B)) * H
+    const width = Math.max(8, Math.round(px(e) - px(w)))
+    const height = Math.max(8, Math.round(py(s) - py(n)))
+    const canvas = sharp({
+      create: {
+        width,
+        height,
+        channels: 4,
+        background: { r: 0, g: 0, b: 0, alpha: 0 },
+      },
+    })
+    const x0 = Math.max(0, Math.round(px(w)))
+    const y0 = Math.max(0, Math.round(py(n)))
+    const x1 = Math.min(W, Math.round(px(w)) + width)
+    const y1 = Math.min(H, Math.round(py(n)) + height)
+    if (x1 - x0 < 1 || y1 - y0 < 1) return canvas.png().toBuffer()
+    const part = await sharp(png)
+      .extract({ left: x0, top: y0, width: x1 - x0, height: y1 - y0 })
+      .png()
+      .toBuffer()
+    return canvas
+      .composite([
+        {
+          input: part,
+          left: x0 - Math.round(px(w)),
+          top: y0 - Math.round(py(n)),
+        },
+      ])
+      .png()
+      .toBuffer()
+  })
+}
+
+/** NISAR backscatter for one day, rendered by NASA GIBS for the area. */
+export function cropSignal(
+  date: string,
+  bbox: Bbox,
+  size?: { width: number; height: number }
+) {
+  const key = `s|${date}|${bbox.join(",")}|${size ? `${size.width}x${size.height}` : ""}`
+  return cached(key, async () => {
+    const [w, s, e, n] = bbox
+    const { width, height } = size ?? cropSize(bbox)
     const url = new URL(
       "https://gibs.earthdata.nasa.gov/wms/epsg4326/best/wms.cgi"
     )
@@ -162,9 +207,6 @@ export async function darkSurfaceChange(a: Buffer, b: Buffer) {
 
 /** A small-enough area from ?w=&s=&e=&n= (max 6° a side), else null. */
 export function readBbox(params: URLSearchParams): Bbox | null {
-  const box = ["w", "s", "e", "n"].map((k) => Number(params.get(k))) as Bbox
-  const [w, s, e, n] = box
-  if (!box.every(Number.isFinite) || w >= e || s >= n) return null
-  if (e - w > 6 || n - s > 6) return null
-  return box.map((v) => Math.round(v * 1e4) / 1e4) as Bbox
+  const box = parseBbox(params)
+  return box && box[2] - box[0] <= 6 && box[3] - box[1] <= 6 ? box : null
 }

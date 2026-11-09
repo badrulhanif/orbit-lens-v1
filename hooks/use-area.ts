@@ -2,7 +2,7 @@
 
 import * as React from "react"
 
-import { areaBoxFor, type AreaHistory, type Bbox } from "@/lib/area"
+import { areaBoxFor, areaQuery, type AreaHistory } from "@/lib/area"
 import type { Place } from "@/lib/geo"
 import type { SarCoverageResponse, SarLayer } from "@/lib/sar"
 
@@ -17,13 +17,12 @@ async function getJson<T>(url: string, signal: AbortSignal): Promise<T> {
   return body as T
 }
 
-const q = ([w, s, e, n]: Bbox) =>
-  `w=${w.toFixed(3)}&s=${s.toFixed(3)}&e=${e.toFixed(3)}&n=${n.toFixed(3)}`
-
 /**
  * Everything the area panel shows for a picked place: recorded hazard
  * history in and around it, and which NISAR radar passes cover it.
  */
+export type AreaData = ReturnType<typeof useArea>
+
 export function useArea(place: Place | null) {
   const bbox = React.useMemo(() => (place ? areaBoxFor(place) : null), [place])
   const key = bbox?.join(",") ?? null
@@ -44,7 +43,7 @@ export function useArea(place: Place | null) {
     })
 
     getJson<AreaHistory>(
-      `/api/area-history?${q(bbox)}${place?.boundaryKey ? `&boundary=${encodeURIComponent(place.boundaryKey)}` : ""}`,
+      `/api/area-history?${areaQuery(bbox, place?.boundaryKey)}`,
       signal
     )
       .then((data) => setHistory({ data, loading: false, error: null }))
@@ -56,7 +55,7 @@ export function useArea(place: Place | null) {
     Promise.all(
       (["movement", "signal"] as const).map((layer) =>
         getJson<SarCoverageResponse>(
-          `/api/sar/coverage?layer=${layer}&${q(bbox)}`,
+          `/api/sar/coverage?layer=${layer}&${areaQuery(bbox)}`,
           signal
         ).catch(() => null)
       )

@@ -1,3 +1,12 @@
+import { inRings, ringsFor } from "@/lib/server/boundaries"
+import { describeQuake, impactSentence } from "@/lib/server/describe"
+import { EONET_CATEGORIES, eonetRecords, refine } from "@/lib/server/eonet"
+import { isOffshore } from "@/lib/server/land"
+import { reliefCentres, warningsFor } from "@/lib/server/local-reports"
+import { majorFloodsFor } from "@/lib/server/major-floods"
+import { normaliseRegion, regionMatcher } from "@/lib/server/regions"
+import { fetchJson, TtlCache, validLatLng } from "@/lib/server/util"
+import { wikipediaSummaries, wikiTitle } from "@/lib/server/wikipedia"
 import {
   inBox,
   type AreaHistory,
@@ -7,18 +16,16 @@ import {
 } from "@/lib/area"
 
 /**
- * Recorded natural hazards in and around an area, from three open sources:
+ * Recorded natural hazards in an area, from open sources:
  *  - Wikidata: named historic disasters with coordinates (e.g. "2008 Bukit
  *    Antarabangsa landslide"), linked to Wikipedia where there's an article
  *  - USGS: earthquakes, M3.5+ since 1970
- *  - NASA EONET: floods (from GDACS), storms, volcanoes, wildfires, landslides
+ *  - NASA EONET: floods (from GDACS, with GDACS's impact reports), storms,
+ *    volcanoes, wildfires, landslides
+ *  - Major Malaysian floods (lib/server/major-floods.ts), state-wide records
+ *  - Live: JKM relief centres and MetMalaysia warnings (local-reports.ts)
  * Each source is optional: if one is down the others still answer.
  */
-
-const USER_AGENT = "OrbitLens/0.1 (location demo)"
-
-const cache = new Map<string, { at: number; data: AreaHistory }>()
-const TTL_MS = 6 * 60 * 60 * 1000
 
 /* ------------------------------------------------------------------ */
 /* Wikidata                                                            */
@@ -53,7 +60,7 @@ type SparqlRow = Record<string, { value: string } | undefined>
 
 async function fromWikidata([w, s, e, n]: Bbox): Promise<HistoryEvent[]> {
   const query = `
-SELECT ?item ?itemLabel ?type ?date ?start ?coord ?article ?locCoord WHERE {
+SELECT ?item ?itemLabel ?itemDescription ?type ?date ?start ?coord ?article ?locCoord ?deaths WHERE {
   SERVICE wikibase:box {
     ?item wdt:P625 ?coord .
     bd:serviceParam wikibase:cornerSouthWest "Point(${w} ${s})"^^geo:wktLiteral .
@@ -67,20 +74,17 @@ SELECT ?item ?itemLabel ?type ?date ?start ?coord ?article ?locCoord WHERE {
   OPTIONAL { ?item wdt:P580 ?start }
   OPTIONAL { ?article schema:about ?item ; schema:isPartOf <https://en.wikipedia.org/> }
   OPTIONAL { ?item wdt:P276 ?loc . ?loc wdt:P625 ?locCoord }
+  OPTIONAL { ?item wdt:P1120 ?deaths }
   SERVICE wikibase:label { bd:serviceParam wikibase:language "en,ms". }
 } LIMIT 300`
   const url = new URL("https://query.wikidata.org/sparql")
   url.searchParams.set("query", query)
-  const res = await fetch(url, {
-    headers: {
-      Accept: "application/sparql-results+json",
-      "User-Agent": USER_AGENT,
-    },
-    signal: AbortSignal.timeout(20000),
-  })
-  if (!res.ok) throw new Error(`Wikidata responded ${res.status}`)
-  const rows = ((await res.json()) as { results: { bindings: SparqlRow[] } })
-    .results.bindings
+  const rows = (
+    await fetchJson<{ results: { bindings: SparqlRow[] } }>(url, {
+      timeoutMs: 20_000,
+      headers: { Accept: "application/sparql-results+json" },
+    })
+  ).results.bindings
 
   const byItem = new Map<string, HistoryEvent>()
   for (const r of rows) {
@@ -112,17 +116,25 @@ SELECT ?item ?itemLabel ?type ?date ?start ?coord ?article ?locCoord WHERE {
       longitude = Number(loc[1])
       approximate = false
     }
+    const about = r.itemDescription?.value
+    const deaths = Number(r.deaths?.value)
+    const description = [
+      about && `${about[0].toUpperCase()}${about.slice(1)}.`,
+      deaths > 0 && `Deaths: ${deaths.toLocaleString("en-GB")}.`,
+    ]
+      .filter(Boolean)
+      .join(" ")
     byItem.set(qid, {
       id: `wd-${qid}`,
       type,
       title,
       date: date?.slice(0, 10) ?? null,
       detail: null,
+      description: description || null,
       source: r.article ? "Wikipedia" : "Wikidata",
       url: r.article?.value ?? item,
       latitude,
       longitude,
-      inside: false,
       approximate,
     })
   }
@@ -160,19 +172,14 @@ async function refineFromWikipedia(events: HistoryEvent[]) {
     redirects: "1",
   }).toString()
   try {
-    const res = await fetch(url, {
-      headers: { "User-Agent": USER_AGENT },
-      signal: AbortSignal.timeout(8000),
-    })
-    if (!res.ok) return
-    const data = (await res.json()) as {
+    const data = await fetchJson<{
       query?: {
         pages?: Record<
           string,
           { title: string; coordinates?: { lat: number; lon: number }[] }
         >
       }
-    }
+    }>(url, { timeoutMs: 8000 })
     for (const page of Object.values(data.query?.pages ?? {})) {
       const precise = page.coordinates?.find((c) => !isRough(c.lat, c.lon))
       if (!precise) continue
@@ -193,7 +200,17 @@ async function refineFromWikipedia(events: HistoryEvent[]) {
 
 type UsgsFeature = {
   id: string
-  properties: { mag: number; place: string | null; time: number; url: string }
+  properties: {
+    mag: number
+    magType: string | null
+    place: string | null
+    time: number
+    url: string
+    felt: number | null
+    cdi: number | null
+    alert: string | null
+    tsunami: number | null
+  }
   geometry: { coordinates: [number, number, number] }
 }
 
@@ -202,9 +219,9 @@ async function fromUsgs([w, s, e, n]: Bbox): Promise<HistoryEvent[]> {
     "https://earthquake.usgs.gov/fdsnws/event/1/query?format=geojson" +
     `&minlongitude=${w}&maxlongitude=${e}&minlatitude=${s}&maxlatitude=${n}` +
     "&starttime=1970-01-01&minmagnitude=3.5&orderby=magnitude&limit=100"
-  const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
-  if (!res.ok) throw new Error(`USGS responded ${res.status}`)
-  const { features } = (await res.json()) as { features: UsgsFeature[] }
+  const { features } = await fetchJson<{ features: UsgsFeature[] }>(url, {
+    timeoutMs: 15_000,
+  })
   return features.map((f) => {
     const [longitude, latitude, depth] = f.geometry.coordinates
     return {
@@ -218,112 +235,19 @@ async function fromUsgs([w, s, e, n]: Bbox): Promise<HistoryEvent[]> {
       ]
         .filter(Boolean)
         .join(" · "),
+      description: describeQuake({ ...f.properties, depth }),
       source: "USGS",
       url: f.properties.url,
       latitude,
       longitude,
-      inside: false,
     }
   })
 }
 
 /* ------------------------------------------------------------------ */
-/* NASA EONET (floods from GDACS, storms, volcanoes, fires…)           */
-/* ------------------------------------------------------------------ */
 
-const EONET_TYPES: Record<string, HazardType> = {
-  floods: "flood",
-  landslides: "landslide",
-  severeStorms: "storm",
-  volcanoes: "volcano",
-  wildfires: "wildfire",
-}
-
-type EonetEvent = {
-  id: string
-  title: string
-  categories: { id: string }[]
-  sources: { id: string; url: string }[]
-  geometry: {
-    date: string
-    type: "Point" | "Polygon"
-    coordinates: [number, number] | [number, number][][]
-  }[]
-}
-
-async function fromEonet([w, s, e, n]: Bbox): Promise<HistoryEvent[]> {
-  const url =
-    "https://eonet.gsfc.nasa.gov/api/v3/events?status=all&limit=200" +
-    `&category=${Object.keys(EONET_TYPES).join(",")}` +
-    `&start=2000-01-01&end=${new Date().toISOString().slice(0, 10)}` +
-    `&bbox=${w},${n},${e},${s}`
-  const res = await fetch(url, { signal: AbortSignal.timeout(15000) })
-  if (!res.ok) throw new Error(`EONET responded ${res.status}`)
-  const { events } = (await res.json()) as { events: EonetEvent[] }
-  const out: HistoryEvent[] = []
-  for (const ev of events) {
-    const g = ev.geometry.at(-1)
-    if (!g) continue
-    let longitude: number
-    let latitude: number
-    let outline: [number, number][] | null = null
-    if (g.type === "Point") {
-      ;[longitude, latitude] = g.coordinates as [number, number]
-    } else {
-      let ring = (g.coordinates as [number, number][][])[0]
-      // Some GDACS rings are [lat, lon]; flip them back.
-      if (ring.some(([x, y]) => Math.abs(y) > 90 && Math.abs(x) <= 90)) {
-        ring = ring.map(([x, y]) => [y, x])
-      }
-      outline = ring
-      ;[longitude, latitude] = polygonCentre(ring)
-    }
-    const type = EONET_TYPES[ev.categories[0]?.id] ?? "disaster"
-    const source = ev.sources[0]
-    out.push({
-      id: `eonet-${ev.id}`,
-      type,
-      // "Flood in Malaysia 1104239" → "Flood in Malaysia"
-      title: ev.title.replace(/\s+\d{5,}$/, ""),
-      date: g.date.slice(0, 10),
-      detail: null,
-      source: source?.id === "GDACS" ? "GDACS" : "NASA EONET",
-      url: source?.url ?? null,
-      latitude,
-      longitude,
-      inside: false,
-      outline,
-    })
-  }
-  return out
-}
-
-/** Area-weighted centre of a polygon ring (falls back to the vertex mean). */
-function polygonCentre(ring: [number, number][]): [number, number] {
-  let a = 0
-  let cx = 0
-  let cy = 0
-  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-    const [x0, y0] = ring[j]
-    const [x1, y1] = ring[i]
-    const f = x0 * y1 - x1 * y0
-    a += f
-    cx += (x0 + x1) * f
-    cy += (y0 + y1) * f
-  }
-  if (Math.abs(a) < 1e-12) {
-    return [
-      ring.reduce((s, p) => s + p[0], 0) / ring.length,
-      ring.reduce((s, p) => s + p[1], 0) / ring.length,
-    ]
-  }
-  return [cx / (3 * a), cy / (3 * a)]
-}
-
-/* ------------------------------------------------------------------ */
-
-/** Area plus a margin so nearby events can be shown too. */
-export function withMargin([w, s, e, n]: Bbox): Bbox {
+/** Area plus a margin: state outlines (with their waters) reach past the land box. */
+function withMargin([w, s, e, n]: Bbox): Bbox {
   const m = Math.max(0.15, Math.max(e - w, n - s) * 0.25)
   return [
     Math.max(-180, w - m),
@@ -333,125 +257,178 @@ export function withMargin([w, s, e, n]: Bbox): Bbox {
   ]
 }
 
-/**
- * Some feed records have latitude and longitude swapped (seen in GDACS flood
- * polygons). Swap those back; drop anything that still isn't a real place.
- */
-function fixCoordinates(e: HistoryEvent): HistoryEvent | null {
-  const ok = (lat: number, lon: number) =>
-    Number.isFinite(lat) &&
-    Number.isFinite(lon) &&
-    Math.abs(lat) <= 90 &&
-    Math.abs(lon) <= 180
-  if (ok(e.latitude, e.longitude)) return e
-  if (ok(e.longitude, e.latitude)) {
-    return { ...e, latitude: e.longitude, longitude: e.latitude }
-  }
-  return null
-}
-
 const snap = (b: Bbox) => b.map((v) => Math.round(v * 20) / 20) as Bbox
 
-/** Even-odd point-in-polygon over all rings (inner rings are holes). */
-function inRings(
-  p: { latitude: number; longitude: number },
-  rings: [number, number][][]
-) {
-  let inside = false
-  for (const ring of rings) {
-    for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
-      const [xi, yi] = ring[i]
-      const [xj, yj] = ring[j]
-      if (
-        yi > p.latitude !== yj > p.latitude &&
-        p.longitude < ((xj - xi) * (p.latitude - yi)) / (yj - yi) + xi
-      ) {
-        inside = !inside
-      }
-    }
+/** The state's major floods (state-wide, no map point). */
+function stateRecords(
+  boundaryKey: string | null | undefined,
+  bbox: Bbox
+): HistoryEvent[] {
+  const [kind, name] = boundaryKey?.split("|") ?? []
+  if (kind !== "state" || !name) return []
+  const centre = {
+    latitude: (bbox[1] + bbox[3]) / 2,
+    longitude: (bbox[0] + bbox[2]) / 2,
   }
-  return inside
+  return majorFloodsFor(name).map((f) => ({
+    id: `major-${f.url.split("/wiki/")[1]}`,
+    type: "flood",
+    title: f.title,
+    date: f.date,
+    detail: f.detail,
+    source: "Wikipedia",
+    url: f.url,
+    ...centre,
+    scope: "state",
+  }))
 }
 
-let boundaries: Promise<Record<string, [number, number][][] | null>> | null =
-  null
-function loadBoundaries() {
-  boundaries ??= import("@/data/boundaries.json")
-    .then(
-      (m) =>
-        (m.default ?? m) as unknown as Record<
-          string,
-          [number, number][][] | null
-        >
-    )
-    .catch(() => ({}))
-  return boundaries
+type Found = Pick<AreaHistory, "events" | "sources">
+
+// Everything found in a search box. Only complete answers are kept, so a
+// source that was down gets retried next time.
+const found = new TtlCache<Found>(200, 6 * 60 * 60_000, (f) =>
+  f.sources.every((s) => s.ok)
+)
+
+async function search(searched: Bbox): Promise<Found> {
+  const runs = await Promise.allSettled([
+    fromWikidata(searched),
+    fromUsgs(searched),
+    eonetRecords(EONET_CATEGORIES, searched, "2000-01-01").then(refine),
+  ])
+  const names = ["Wikipedia / Wikidata", "USGS", "NASA EONET"]
+  runs.forEach((r, i) => {
+    if (r.status === "rejected")
+      console.warn(`[area-history] ${names[i]} failed:`, String(r.reason))
+  })
+  return {
+    events: runs
+      .flatMap((r) => (r.status === "fulfilled" ? r.value : []))
+      .filter((e) => validLatLng(e.latitude, e.longitude)),
+    sources: runs.map((r, i) => ({
+      name: names[i],
+      ok: r.status === "fulfilled",
+    })),
+  }
 }
+
+// Every flood GDACS has for Malaysia: their impact reports name districts,
+// which places a flood more precisely than its single map point.
+const MALAYSIA: Bbox = [99.5, 0.8, 119.5, 7.5]
+const national = new TtlCache<HistoryEvent[]>(1, 30 * 60_000)
+const nationalFloods = () =>
+  national.get("floods", () =>
+    eonetRecords(["floods"], MALAYSIA, "2000-01-01").then(refine)
+  )
+
+const settle = <T>(p: Promise<T>, fallback: T) =>
+  p.then(
+    (value) => ({ value, ok: true }),
+    () => ({ value: fallback, ok: false })
+  )
 
 /**
- * Hazard records inside an area. `boundaryKey` (a state or district) tests
- * against its real outline as well as its land extent, so offshore events
- * and events in enclaves (KL inside Selangor) are left out.
+ * Hazard records for an area, newest first. With `boundaryKey` (a state or
+ * district) "inside" means inside its real outline, plus floods whose
+ * impact reports name places in it; events at sea within it (state waters)
+ * are flagged `offshore`. Relief centres open now come first.
  */
 export async function areaHistory(
   area: Bbox,
   boundaryKey?: string | null
 ): Promise<AreaHistory> {
   const bbox = snap(area)
-  const rings = boundaryKey
-    ? ((await loadBoundaries())[boundaryKey] ?? null)
-    : null
-  const isInside = (e: HistoryEvent) =>
-    inBox(e, bbox) && (!rings || inRings(e, rings))
-  // Search a little wider: some records sit on rough coordinates that get
-  // corrected to a point inside the area.
+  const rings = await ringsFor(boundaryKey)
   const searched = withMargin(bbox)
-  const key = searched.join(",")
-  const hit = cache.get(key)
-  if (hit && Date.now() - hit.at < TTL_MS) {
-    return {
-      ...hit.data,
-      bbox,
-      events: hit.data.events
-        .map((e) => ({ ...e, inside: isInside(e) }))
-        .filter((e) => e.inside),
+  const match = await regionMatcher(boundaryKey)
+
+  const [{ events, sources }, floods, centres, warnings] = await Promise.all([
+    found.get(searched.join(","), () => search(searched)),
+    match ? nationalFloods().catch(() => []) : Promise.resolve([]),
+    settle(reliefCentres(), []),
+    boundaryKey && match
+      ? settle(warningsFor(boundaryKey), [])
+      : Promise.resolve(null),
+  ])
+
+  const isInside = (e: HistoryEvent) =>
+    // Country-level placeholder points don't belong to any one state.
+    !(e.source === "GDACS" && e.approximate) &&
+    // The real boundary when we have one (the box only frames the map and
+    // can clip edge towns like Tawau); otherwise the box.
+    (rings ? inRings(e, rings) : inBox(e, bbox))
+  const inside = events.filter(isInside)
+  const offshore = await Promise.all(inside.map((e) => isOffshore(e)))
+  const out = inside.map((e, i) => (offshore[i] ? { ...e, offshore: true } : e))
+
+  // Floods with impacts reported here by the agencies: say what, and add
+  // those whose GDACS point is elsewhere.
+  const ids = new Map(out.map((e, i) => [e.id, i]))
+  if (match) {
+    for (const f of floods) {
+      if (!f.impacts?.length) continue
+      const here = []
+      for (const i of f.impacts) if (await match(i.region)) here.push(i)
+      if (!here.length) continue
+      const at = ids.get(f.id)
+      if (at !== undefined) {
+        out[at] = {
+          ...out[at],
+          detail: `Reported here: ${impactSentence(here, 3)}`,
+        }
+        continue
+      }
+      out.push({
+        ...f,
+        scope: "reported",
+        outline: null,
+        detail: `Reported here: ${impactSentence(here, 3)}`,
+      })
     }
   }
 
-  const runs = await Promise.allSettled([
-    fromWikidata(searched),
-    fromUsgs(searched),
-    fromEonet(searched),
-  ])
-  const names = ["Wikipedia / Wikidata", "USGS", "NASA EONET"]
-  const events = runs
-    .flatMap((r) => (r.status === "fulfilled" ? r.value : []))
-    .map(fixCoordinates)
-    .filter((e): e is HistoryEvent => e !== null)
-    // Newest first; undated last.
-    .sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""))
+  // Relief centres open now, by the state and district JKM gives.
+  const [kind, name] = boundaryKey?.split("|") ?? []
+  for (const { event, state, district } of centres.value) {
+    const here = match
+      ? kind === "state"
+        ? normaliseRegion(state) === normaliseRegion(name)
+        : await match(district, state)
+      : !event.scope && inBox(event, bbox)
+    if (here) out.push(event)
+  }
 
-  // Cached: everything found in the search box (the inside test runs per
-  // request, since nearby areas share a search box).
-  const data: AreaHistory = {
+  out.push(...stateRecords(boundaryKey, bbox))
+  await addSummaries(out)
+  out.sort(
+    (a, b) =>
+      Number(!!b.live) - Number(!!a.live) ||
+      (b.date ?? "").localeCompare(a.date ?? "")
+  )
+
+  return {
     bbox,
     searched,
-    events,
-    sources: runs.map((r, i) => ({
-      name: names[i],
-      ok: r.status === "fulfilled",
-    })),
+    sources: [
+      ...sources,
+      { name: "JKM relief centres", ok: centres.ok },
+      ...(warnings ? [{ name: "MetMalaysia warnings", ok: warnings.ok }] : []),
+    ],
+    warnings: warnings?.value ?? [],
+    events: out,
   }
-  const result: AreaHistory = {
-    ...data,
-    events: events
-      .map((e) => ({ ...e, inside: isInside(e) }))
-      .filter((e) => e.inside),
+}
+
+/** Wikipedia's opening sentences for events linked to an article. */
+async function addSummaries(events: HistoryEvent[]) {
+  const linked = events.filter((e) => wikiTitle(e.url))
+  if (!linked.length) return
+  const summaries = await wikipediaSummaries(linked.map((e) => e.url)).catch(
+    () => new Map<string, string>()
+  )
+  for (const e of linked) {
+    const text = summaries.get(wikiTitle(e.url)!)
+    if (text) e.description = text
   }
-  // Only cache complete answers, so a source that was down gets retried.
-  if (runs.every((r) => r.status === "fulfilled")) {
-    if (cache.size > 200) cache.delete(cache.keys().next().value!)
-    cache.set(key, { at: Date.now(), data })
-  }
-  return result
 }

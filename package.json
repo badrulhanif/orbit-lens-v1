@@ -10,7 +10,10 @@
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
     "typecheck": "tsc --noEmit",
-    "postinstall": "node scripts/copy-maplibre-worker.mjs"
+    "postinstall": "node scripts/copy-maplibre-worker.mjs",
+    "data:gazetteer": "node scripts/build-gazetteer.mjs && node scripts/enrich-bboxes.mjs",
+    "data:boundaries": "node scripts/fetch-boundaries.mjs",
+    "data:land": "node scripts/build-land.mjs"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",

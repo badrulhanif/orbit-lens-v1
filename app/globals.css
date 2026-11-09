@@ -127,3 +127,23 @@
     @apply font-sans;
   }
 }
+
+/* Hover card for hazard markers (MapLibre popup), matching the app theme. */
+.event-hover .maplibregl-popup-content {
+  @apply rounded-xl bg-popover px-3 py-2 text-popover-foreground shadow-lg ring-1 ring-foreground/10;
+}
+.event-hover.maplibregl-popup-anchor-top .maplibregl-popup-tip {
+  border-bottom-color: var(--popover);
+}
+.event-hover.maplibregl-popup-anchor-bottom .maplibregl-popup-tip {
+  border-top-color: var(--popover);
+}
+.event-hover.maplibregl-popup-anchor-left .maplibregl-popup-tip {
+  border-right-color: var(--popover);
+}
+.event-hover.maplibregl-popup-anchor-right .maplibregl-popup-tip {
+  border-left-color: var(--popover);
+}
+.event-hover {
+  pointer-events: none;
+}

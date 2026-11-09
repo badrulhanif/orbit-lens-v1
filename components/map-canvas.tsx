@@ -9,13 +9,19 @@ import type {
 } from "maplibre-gl"
 import "maplibre-gl/dist/maplibre-gl.css"
 
-import { circleRing, isArea, type DeviceLocation, type Place } from "@/lib/geo"
+import { isArea, type Place } from "@/lib/geo"
 import { styleFor, styleKey, type MapView } from "@/lib/map-styles"
-import { HAZARD_COLOR, type HistoryEvent } from "@/lib/area"
+import {
+  formatEventDate,
+  HAZARD_COLOR,
+  HAZARD_LABEL,
+  precisionOf,
+  type HistoryEvent,
+} from "@/lib/area"
 import type { SarOverlay } from "@/lib/sar"
 
 export type FocusRequest = {
-  target: "device" | "picked" | "area" | "point"
+  target: "picked" | "area" | "point"
   /** Bump to re-run the same focus request. */
   nonce: number
   /** For "area": [west, south, east, north] to frame. */
@@ -33,12 +39,14 @@ export type MapViewport = {
 }
 
 type MapCanvasProps = {
-  device: DeviceLocation | null
   /** The place picked in search. Exact spots get a pin; areas are framed. */
   picked: Place | null
   /** Hazard history markers for the picked area. */
   events?: HistoryEvent[]
   selectedEventId?: string | null
+  /** Event under the pointer (on the map or in the list). */
+  hoveredEventId?: string | null
+  onHoverEvent?: (id: string | null) => void
   onSelectEvent?: (id: string) => void
   /** Affected-area outline of the selected event, if it has one. */
   outline?: [number, number][] | null
@@ -49,56 +57,10 @@ type MapCanvasProps = {
   onViewportChange?: (viewport: MapViewport) => void
   /** Panels floating over the map that the camera should avoid. */
   obstructionRefs?: React.RefObject<HTMLElement | null>[]
+  /** An analysis result image (e.g. a change map) over an area. */
+  analysis?: { url: string; bbox: [number, number, number, number] } | null
   /** The MapLibre map, once it has loaded (for the compare view). */
   onMap?: (map: MapLibreMap | null) => void
-}
-
-const DEVICE_COLOR = "#0ea5e9" // sky-500
-const ACCURACY_SOURCE = "device-accuracy"
-
-function accuracyGeoJSON(device: DeviceLocation | null): FeatureCollection {
-  return {
-    type: "FeatureCollection",
-    features: device
-      ? [
-          {
-            type: "Feature",
-            properties: {},
-            geometry: {
-              type: "Polygon",
-              coordinates: [circleRing(device, Math.max(device.accuracy, 5))],
-            },
-          },
-        ]
-      : [],
-  }
-}
-
-/** Sources/layers are wiped by setStyle, so this runs on every style load. */
-function syncAccuracyLayer(map: MapLibreMap, device: DeviceLocation | null) {
-  const data = accuracyGeoJSON(device)
-  const source = map.getSource(ACCURACY_SOURCE) as GeoJSONSource | undefined
-  if (source) {
-    source.setData(data)
-    return
-  }
-  map.addSource(ACCURACY_SOURCE, { type: "geojson", data })
-  map.addLayer({
-    id: "device-accuracy-fill",
-    type: "fill",
-    source: ACCURACY_SOURCE,
-    paint: { "fill-color": DEVICE_COLOR, "fill-opacity": 0.12 },
-  })
-  map.addLayer({
-    id: "device-accuracy-line",
-    type: "line",
-    source: ACCURACY_SOURCE,
-    paint: {
-      "line-color": DEVICE_COLOR,
-      "line-width": 1.5,
-      "line-opacity": 0.6,
-    },
-  })
 }
 
 /* ------------------------------------------------------------------ */
@@ -169,14 +131,39 @@ export function syncSarLayers(map: MapLibreMap, sar: SarOverlay | null) {
 
 /* ------------------------------------------------------------------ */
 
-function deviceMarkerElement() {
-  const el = document.createElement("div")
-  el.setAttribute("aria-label", "Your location")
-  el.className = "relative grid size-8 place-items-center"
-  el.innerHTML = `
-    <span class="absolute inset-1 animate-ping rounded-full bg-sky-500/50"></span>
-    <span class="relative size-4 rounded-full border-[3px] border-white bg-sky-500 shadow-md shadow-sky-900/40"></span>`
-  return el
+const ANALYSIS_SOURCE = "analysis-overlay"
+
+/** Draw (or replace / remove) the analysis image, above radar, below labels. */
+function syncAnalysisLayer(
+  map: MapLibreMap,
+  analysis: { url: string; bbox: [number, number, number, number] } | null
+) {
+  const current = map.getSource(ANALYSIS_SOURCE) as
+    (import("maplibre-gl").ImageSource & { url?: string }) | undefined
+  if (current && analysis && current.url === analysis.url) return
+  if (map.getLayer(ANALYSIS_SOURCE)) map.removeLayer(ANALYSIS_SOURCE)
+  if (current) map.removeSource(ANALYSIS_SOURCE)
+  if (!analysis) return
+  const [w, s, e, n] = analysis.bbox
+  map.addSource(ANALYSIS_SOURCE, {
+    type: "image",
+    url: analysis.url,
+    coordinates: [
+      [w, n],
+      [e, n],
+      [e, s],
+      [w, s],
+    ],
+  })
+  map.addLayer(
+    {
+      id: ANALYSIS_SOURCE,
+      type: "raster",
+      source: ANALYSIS_SOURCE,
+      paint: { "raster-opacity": 0.95, "raster-resampling": "nearest" },
+    },
+    firstLabelLayer(map)
+  )
 }
 
 const OUTLINE_SOURCE = "event-outline"
@@ -214,18 +201,61 @@ function syncOutlineLayer(map: MapLibreMap, ring: [number, number][] | null) {
   })
 }
 
-/** Small coloured dot for a past hazard; ringed when selected. */
+/** The little card shown when hovering an event (built as DOM, no HTML). */
+function hoverCard(ev: HistoryEvent) {
+  const box = document.createElement("div")
+  box.className = "grid gap-0.5 text-xs"
+  const kind = document.createElement("p")
+  kind.className = "text-[10px] font-semibold tracking-wide uppercase"
+  kind.style.color = HAZARD_COLOR[ev.type]
+  kind.textContent = `${HAZARD_LABEL[ev.type]} · ${formatEventDate(ev.date)}`
+  const title = document.createElement("p")
+  title.className = "font-semibold leading-snug"
+  title.textContent = ev.title
+  box.append(kind, title)
+  if (ev.detail) {
+    const detail = document.createElement("p")
+    detail.className = "text-muted-foreground"
+    detail.textContent = ev.detail
+    box.append(detail)
+  }
+  const meta = document.createElement("p")
+  meta.className = "text-[10px] text-muted-foreground"
+  meta.textContent = [
+    ev.live && "Open now",
+    ev.offshore && "Offshore",
+    precisionOf(ev).label,
+    ev.source,
+    "click to open",
+  ]
+    .filter(Boolean)
+    .join(" · ")
+  box.append(meta)
+  return box
+}
+
+/** Small coloured dot for a past hazard (hollow at sea); ringed when selected. */
 function eventMarkerElement(ev: HistoryEvent) {
   const el = document.createElement("button")
   el.type = "button"
-  el.title = `${ev.title} (${ev.date?.slice(0, 4) ?? "date unknown"})`
-  el.setAttribute("aria-label", el.title)
+  el.setAttribute(
+    "aria-label",
+    `${ev.title} (${ev.date?.slice(0, 4) ?? "date unknown"})`
+  )
   el.className =
     // No transform/scale on this element: MapLibre positions markers with a
     // CSS transform, and scaling here would scale the position too.
-    "group grid size-5 cursor-pointer place-items-center rounded-full"
+    "group relative grid size-5 cursor-pointer place-items-center rounded-full"
   const color = HAZARD_COLOR[ev.type]
-  el.innerHTML = `<span style="background:${color};opacity:${ev.inside ? 1 : 0.55}" class="block size-3.5 rounded-full border-2 border-white shadow-md shadow-black/30 transition-transform group-hover:scale-125 group-data-[selected=true]:scale-150 group-data-[selected=true]:ring-2 group-data-[selected=true]:ring-orange-500"></span>`
+  const fill = ev.offshore
+    ? `background:white;border-color:${color}`
+    : `background:${color}`
+  el.innerHTML = `<span style="${fill}" class="block size-3.5 rounded-full ${ev.offshore ? "border-[3px]" : "border-2 border-white"} shadow-md shadow-black/30 transition-transform group-hover:scale-125 group-data-[selected=true]:scale-150 group-data-[selected=true]:ring-2 group-data-[selected=true]:ring-orange-500 group-data-[hovered=true]:scale-150 group-data-[hovered=true]:ring-2 group-data-[hovered=true]:ring-foreground/70"></span>${
+    // Happening now: a pulse around the dot.
+    ev.live
+      ? `<span style="background:${color}" class="pointer-events-none absolute inset-0 animate-ping rounded-full opacity-40"></span>`
+      : ""
+  }`
   return el
 }
 
@@ -318,10 +348,11 @@ function zoomToFit(
 }
 
 export function MapCanvas({
-  device,
   picked,
   events = [],
   selectedEventId = null,
+  hoveredEventId = null,
+  onHoverEvent,
   onSelectEvent,
   outline = null,
   sar,
@@ -331,20 +362,25 @@ export function MapCanvas({
   onViewportChange,
   obstructionRefs,
   onMap,
+  analysis = null,
 }: MapCanvasProps) {
   const containerRef = React.useRef<HTMLDivElement>(null)
   const mapRef = React.useRef<MapLibreMap | null>(null)
   const libRef = React.useRef<typeof import("maplibre-gl") | null>(null)
-  const deviceMarker = React.useRef<MapLibreMarker | null>(null)
   const pinMarker = React.useRef<MapLibreMarker | null>(null)
   const eventMarkers = React.useRef(new Map<string, MapLibreMarker>())
+  const hoverPopup = React.useRef<import("maplibre-gl").Popup | null>(null)
+  const onHoverEventRef = React.useRef(onHoverEvent)
+  React.useEffect(() => {
+    onHoverEventRef.current = onHoverEvent
+  }, [onHoverEvent])
   const onSelectEventRef = React.useRef(onSelectEvent)
   React.useEffect(() => {
     onSelectEventRef.current = onSelectEvent
   }, [onSelectEvent])
-  const deviceRef = React.useRef(device)
   const sarRef = React.useRef(sar)
   const outlineRef = React.useRef(outline)
+  const analysisRef = React.useRef(analysis)
   const styleRef = React.useRef({ view, theme })
   const callbacks = React.useRef({ onViewportChange })
   const onMapRef = React.useRef(onMap)
@@ -392,7 +428,7 @@ export function MapCanvas({
         map.setProjection({ type: "globe" })
         syncSarLayers(map, sarRef.current)
         syncOutlineLayer(map, outlineRef.current)
-        syncAccuracyLayer(map, deviceRef.current)
+        syncAnalysisLayer(map, analysisRef.current)
       })
       map.on("moveend", () => {
         if (!map) return
@@ -433,7 +469,6 @@ export function MapCanvas({
       onMapRef.current?.(null)
       map?.remove()
       mapRef.current = null
-      deviceMarker.current = null
       pinMarker.current = null
     }
   }, [])
@@ -450,7 +485,7 @@ export function MapCanvas({
 
     if (view === "3d" && prev.view !== "3d") {
       // Tilt to show terrain and buildings; get close enough to see them.
-      const target = picked ?? device ?? null
+      const target = picked
       if (map.getZoom() < 14 && target) {
         map.flyTo({
           center: [target.longitude, target.latitude],
@@ -485,30 +520,17 @@ export function MapCanvas({
     }
   }, [sar, ready])
 
-  // Device marker + accuracy circle.
+  // Analysis result image.
   React.useEffect(() => {
-    deviceRef.current = device
+    analysisRef.current = analysis
     const map = mapRef.current
-    const lib = libRef.current
-    if (!ready || !map || !lib) return
-
-    // isStyleLoaded() is false while tiles stream in (e.g. mid-flyTo); if our
-    // source isn't there yet, the style.load handler adds it from deviceRef.
-    if (map.getSource(ACCURACY_SOURCE) || map.isStyleLoaded()) {
-      syncAccuracyLayer(map, device)
+    if (!ready || !map) return
+    try {
+      syncAnalysisLayer(map, analysis)
+    } catch {
+      // Style mid-swap; style.load redraws it.
     }
-
-    if (!device) {
-      deviceMarker.current?.remove()
-      deviceMarker.current = null
-    } else if (deviceMarker.current) {
-      deviceMarker.current.setLngLat([device.longitude, device.latitude])
-    } else {
-      deviceMarker.current = new lib.Marker({ element: deviceMarkerElement() })
-        .setLngLat([device.longitude, device.latitude])
-        .addTo(map)
-    }
-  }, [device, ready])
+  }, [analysis, ready])
 
   // Outline of the selected flood's affected area.
   React.useEffect(() => {
@@ -529,6 +551,9 @@ export function MapCanvas({
     for (const m of markers.values()) m.remove()
     markers.clear()
     for (const ev of events) {
+      // State-wide records, and those whose point lies outside the area,
+      // aren't marked.
+      if (ev.scope === "state" || ev.scope === "reported") continue
       // Never let one bad record take the map down.
       if (Math.abs(ev.latitude) > 90 || Math.abs(ev.longitude) > 180) continue
       const el = eventMarkerElement(ev)
@@ -536,6 +561,10 @@ export function MapCanvas({
         e.stopPropagation()
         onSelectEventRef.current?.(ev.id)
       })
+      el.addEventListener("mouseenter", () => onHoverEventRef.current?.(ev.id))
+      el.addEventListener("mouseleave", () => onHoverEventRef.current?.(null))
+      el.addEventListener("focus", () => onHoverEventRef.current?.(ev.id))
+      el.addEventListener("blur", () => onHoverEventRef.current?.(null))
       markers.set(
         ev.id,
         new lib.Marker({ element: el })
@@ -545,13 +574,42 @@ export function MapCanvas({
     }
   }, [events, ready])
 
+  // Selected / hovered marker styling, and the hover card.
   React.useEffect(() => {
+    const focusId = hoveredEventId ?? selectedEventId
     for (const [id, m] of eventMarkers.current) {
       const el = m.getElement()
       el.dataset.selected = String(id === selectedEventId)
-      el.style.zIndex = id === selectedEventId ? "3" : ""
+      el.dataset.hovered = String(id === hoveredEventId)
+      // Fade the others while one is hovered, so it stands out.
+      // (MapLibre sets the marker element's own opacity, so fade the dot.)
+      const dot = el.firstElementChild as HTMLElement | null
+      if (dot) {
+        const dimmed = !!hoveredEventId && id !== hoveredEventId
+        dot.style.opacity = dimmed ? "0.25" : "1"
+      }
+      el.style.zIndex = id === focusId ? "3" : ""
     }
-  }, [selectedEventId, events, ready])
+
+    hoverPopup.current?.remove()
+    hoverPopup.current = null
+    const map = mapRef.current
+    const lib = libRef.current
+    const ev = hoveredEventId
+      ? events.find((e) => e.id === hoveredEventId)
+      : null
+    if (!ready || !map || !lib || !ev || ev.scope === "state") return
+    hoverPopup.current = new lib.Popup({
+      closeButton: false,
+      closeOnClick: false,
+      offset: 14,
+      className: "event-hover",
+      maxWidth: "260px",
+    })
+      .setLngLat([ev.longitude, ev.latitude])
+      .setDOMContent(hoverCard(ev))
+      .addTo(map)
+  }, [selectedEventId, hoveredEventId, events, ready])
 
   // Pin for an exact spot (an address, a building, a hazard event). Areas
   // like states or cities have no single point worth pinning.
@@ -620,13 +678,7 @@ export function MapCanvas({
       )
     }
 
-    if (focus.target === "device" && device) {
-      go(
-        device.longitude,
-        device.latitude,
-        device.accuracy < 200 ? 16 : device.accuracy < 2000 ? 14 : 12
-      )
-    } else if (focus.target === "area" && focus.bbox) {
+    if (focus.target === "area" && focus.bbox) {
       frame(focus.bbox, 12)
     } else if (focus.target === "point" && focus.point) {
       go(focus.point.longitude, focus.point.latitude, focus.point.zoom)

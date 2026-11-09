@@ -88,7 +88,7 @@ const SHORT: Record<string, string> = {
   wp: "wilayah persekutuan",
 }
 
-export function normaliseName(text: string) {
+function normaliseName(text: string) {
   return text
     .toLowerCase()
     .normalize("NFKD")
@@ -124,7 +124,7 @@ function matchQuality(keys: string[], q: string) {
   return best
 }
 
-export type GazetteerHit = Place & { match: 0 | 1 | 2; rank: number }
+type GazetteerHit = Place & { match: 0 | 1 | 2; rank: number }
 
 export async function searchGazetteer(
   query: string,
@@ -187,4 +187,77 @@ export async function searchGazetteer(
     if (out.length >= limit) break
   }
   return out
+}
+
+/**
+ * Nearest town or city to a point (within ~40 km), as "Kluang, Johor".
+ * Used to name events that sources only label by country.
+ */
+export async function nearestTown(latitude: number, longitude: number) {
+  const entries = await load()
+  let best: Row | null = null
+  let bestD = Infinity
+  const k = Math.cos((latitude * Math.PI) / 180)
+  for (const { row } of entries) {
+    const kind = row[3]
+    if (kind !== "city" && kind !== "town") continue
+    const dx = (row[2] - longitude) * k
+    const dy = row[1] - latitude
+    const d = dx * dx + dy * dy
+    if (d < bestD) {
+      bestD = d
+      best = row
+    }
+  }
+  if (!best || Math.sqrt(bestD) * 111 > 40) return null
+  // "Kluang, Daerah Kluang, Johor, Malaysia" → "Kluang, Johor"
+  const parts = best[4].split(", ").filter((p) => !/^Daerah |Malaysia/.test(p))
+  const state = parts.at(-1)
+  return state && state !== best[0] ? `${best[0]}, ${state}` : best[0]
+}
+
+/**
+ * A Malaysian place by exact name ("Taiping", "Pontian District"), the
+ * biggest kind first: { kind, area: "Larut Matang & Selama, Perak, Malaysia" }.
+ */
+export async function gazetteerPlace(name: string) {
+  const q = normaliseName(
+    name.replace(/\b(district|daerah|jajahan|bahagian)\b/gi, " ")
+  )
+  if (q.length < 3) return null
+  const entries = await load()
+  let best: Row | null = null
+  for (const { row, keys } of entries) {
+    if (!row[4].endsWith("Malaysia") || !keys.includes(q)) continue
+    if (!best || RANK[row[3]] < RANK[best[3]]) best = row
+  }
+  return best ? { kind: best[3], area: best[4] } : null
+}
+
+/** Malaysian states and districts whose box holds a point, smallest first. */
+export async function adminAreasAt(latitude: number, longitude: number) {
+  const entries = await load()
+  return entries
+    .map((e) => e.row)
+    .filter(
+      (r) =>
+        (r[3] === "district" || r[3] === "state") &&
+        r[4].endsWith("Malaysia") &&
+        r[6] &&
+        longitude >= r[6][0] &&
+        longitude <= r[6][2] &&
+        latitude >= r[6][1] &&
+        latitude <= r[6][3]
+    )
+    .map((r) => ({
+      name: r[0],
+      kind: r[3] as "district" | "state",
+      area: r[4],
+      bbox: r[6]!,
+    }))
+    .sort(
+      (a, b) =>
+        (a.bbox[2] - a.bbox[0]) * (a.bbox[3] - a.bbox[1]) -
+        (b.bbox[2] - b.bbox[0]) * (b.bbox[3] - b.bbox[1])
+    )
 }

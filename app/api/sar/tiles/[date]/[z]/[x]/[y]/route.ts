@@ -1,6 +1,8 @@
 import type { NextRequest } from "next/server"
 import sharp from "sharp"
 
+import { TtlCache } from "@/lib/server/util"
+
 /**
  * NISAR backscatter map tiles from NASA GIBS, through our server:
  *  - cached, and retried once (GIBS sometimes fails tiles under load)
@@ -16,8 +18,8 @@ const EMPTY = Buffer.from(
   "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=",
   "base64"
 )
-const cache = new Map<string, Promise<Buffer | null>>()
-const CACHE_MAX = 3000
+// Tiles that couldn't be fetched or rebuilt aren't kept, so they're retried.
+const cache = new TtlCache<Buffer | null>(3000, Infinity, (v) => v !== null)
 
 async function download(date: string, z: number, x: number, y: number) {
   const url = `${GIBS}/${date}/GoogleMapsCompatible_Level13/${z}/${y}/${x}.png`
@@ -44,6 +46,8 @@ async function download(date: string, z: number, x: number, y: number) {
  *    tiny 288-byte image.
  *  - half-transparent pixels: healthy tiles only use fully solid or fully
  *    see-through pixels; the broken ones are full of in-between values.
+ *  - solid pure black. Real data is never exactly 0,0,0 (even open water
+ *    renders as a dark green), so a tile that's mostly pure black is broken.
  * Checked in 32×32 patches; one bad patch flags the tile.
  */
 async function looksCorrupt(png: Buffer) {
@@ -55,12 +59,15 @@ async function looksCorrupt(png: Buffer) {
   const W = info.width
   let opaque = 0
   let partial = 0
+  let black = 0
   for (let i = 3; i < data.length; i += 4) {
     if (data[i] > 0) opaque++
     if (data[i] > 0 && data[i] < 255) partial++
+    if (data[i] > 0 && !data[i - 1] && !data[i - 2] && !data[i - 3]) black++
   }
   if (opaque === 0) return png.length > 5000
   if (partial / (data.length / 4) > 0.02) return true
+  if (black / opaque > 0.5) return true
 
   const P = 32
   for (let by = 0; by + P <= info.height; by += P) {
@@ -118,21 +125,18 @@ function tile(
   y: number,
   isParent = false
 ): Promise<Buffer | null> {
-  const key = `${date}/${z}/${x}/${y}`
-  let pending = cache.get(key)
-  if (!pending) {
-    pending = (async () => {
-      const png = await download(date, z, x, y)
-      if (png && !(await looksCorrupt(png))) return png
-      // Broken or missing: rebuild from up to three zoom levels up.
-      return z > 1 && (isParent ? z > 4 : true)
-        ? fromParent(date, z, x, y)
-        : null
-    })()
-    if (cache.size >= CACHE_MAX) cache.delete(cache.keys().next().value!)
-    cache.set(key, pending)
-  }
-  return pending
+  return cache.get(`${date}/${z}/${x}/${y}`, async () => {
+    const png = await download(date, z, x, y)
+    if (png && !(await looksCorrupt(png))) return png
+    // GIBS's broken tiles are intermittent: one more try first.
+    if (png) {
+      await new Promise((r) => setTimeout(r, 400))
+      const again = await download(date, z, x, y)
+      if (again && !(await looksCorrupt(again))) return again
+    }
+    // Broken or missing: rebuild from up to three zoom levels up.
+    return z > 1 && (!isParent || z > 4) ? fromParent(date, z, x, y) : null
+  })
 }
 
 export async function GET(

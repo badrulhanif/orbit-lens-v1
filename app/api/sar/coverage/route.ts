@@ -1,7 +1,9 @@
 import type { NextRequest } from "next/server"
 
+import type { Bbox } from "@/lib/area"
 import type { SarCoverageResponse, SarLayer } from "@/lib/sar"
 import { findCoverage } from "@/lib/server/nisar"
+import { parseBbox } from "@/lib/server/util"
 
 /** Largest area searched at once (degrees); the archive errors on much bigger boxes. Bigger views use the middle. */
 const MAX_SPAN = 6
@@ -17,10 +19,11 @@ export async function GET(request: NextRequest) {
   if (layer !== "movement" && layer !== "signal") {
     return Response.json({ error: "Unknown layer." }, { status: 400 })
   }
-  let [w, s, e, n] = ["w", "s", "e", "n"].map((k) => Number(params.get(k)))
-  if (![w, s, e, n].every(Number.isFinite) || w >= e || s >= n) {
+  const box = parseBbox(params)
+  if (!box) {
     return Response.json({ error: "Invalid area." }, { status: 400 })
   }
+  let [w, s, e, n] = box
 
   const centre = { latitude: (s + n) / 2, longitude: (w + e) / 2 }
   // Zoomed far out: search the middle of the view rather than half the
@@ -33,12 +36,12 @@ export async function GET(request: NextRequest) {
     s = centre.latitude - MAX_SPAN / 2
     n = centre.latitude + MAX_SPAN / 2
   }
-  const bbox: [number, number, number, number] = [
+  const bbox = [
     Math.max(w, -180),
     Math.max(s, -85),
     Math.min(e, 180),
     Math.min(n, 85),
-  ].map((v) => Math.round(v * 100) / 100) as [number, number, number, number]
+  ].map((v) => Math.round(v * 100) / 100) as Bbox
 
   try {
     const cycles = await findCoverage(layer, bbox, centre)

@@ -14,7 +14,8 @@ const fontMono = Geist_Mono({
 
 export const metadata: Metadata = {
   title: "Orbit Lens",
-  description: "Locate your IP address and device on a live map.",
+  description:
+    "Monitor floods, ground movement, landslides, forests and farmland with NASA-ISRO NISAR radar.",
 }
 
 export default function RootLayout({
