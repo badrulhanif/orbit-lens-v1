@@ -177,6 +177,10 @@ export async function searchGazetteer(
       longitude,
       bbox,
       zoom: ZOOM[kind],
+      boundaryKey:
+        kind === "state" || kind === "district"
+          ? `${kind}|${name}|${area}`
+          : undefined,
       match: m as 0 | 1 | 2,
       rank: RANK[kind],
     })

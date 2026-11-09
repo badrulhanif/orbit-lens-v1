@@ -22,7 +22,8 @@ async function download(name) {
   if (!res.ok) throw new Error(`${name}: HTTP ${res.status}`)
   const path = join(work, name)
   writeFileSync(path, Buffer.from(await res.arrayBuffer()))
-  if (name.endsWith(".zip")) execFileSync("unzip", ["-o", "-q", path, "-d", work])
+  if (name.endsWith(".zip"))
+    execFileSync("unzip", ["-o", "-q", path, "-d", work])
   console.log("downloaded", name)
   return path
 }
@@ -54,7 +55,11 @@ const admin1 = new Map(rows("admin1CodesASCII.txt").map((r) => [r[0], r[1]]))
 const admin2 = new Map(rows("admin2Codes.txt").map((r) => [r[0], r[1]]))
 
 const area = (cc, a1, a2, skip) =>
-  [admin2.get(`${cc}.${a1}.${a2}`), admin1.get(`${cc}.${a1}`), countries.get(cc)?.name]
+  [
+    admin2.get(`${cc}.${a1}.${a2}`),
+    admin1.get(`${cc}.${a1}`),
+    countries.get(cc)?.name,
+  ]
     .filter((v) => v && v !== skip)
     .filter((v, i, arr) => arr.indexOf(v) === i)
     .join(", ")
@@ -65,24 +70,62 @@ const out = []
 const round = (n) => Math.round(n * 1e4) / 1e4
 
 // Countries, with an extent from their outline ----------------------------
-const shapes = JSON.parse(readFileSync(join(work, "shapes_simplified_low.json"), "utf8"))
+const shapes = JSON.parse(
+  readFileSync(join(work, "shapes_simplified_low.json"), "utf8")
+)
 for (const f of shapes.features) {
   const info = countryById.get(String(f.properties.geoNameId))
   if (!info) continue
   const pts = f.geometry.coordinates.flat(f.geometry.type === "Polygon" ? 1 : 2)
-  let w = 180, s = 90, e = -180, n = -90
+  let w = 180,
+    s = 90,
+    e = -180,
+    n = -90
   for (const [x, y] of pts) {
-    w = Math.min(w, x); e = Math.max(e, x); s = Math.min(s, y); n = Math.max(n, y)
+    w = Math.min(w, x)
+    e = Math.max(e, x)
+    s = Math.min(s, y)
+    n = Math.max(n, y)
   }
   // Countries across the antimeridian (Russia, Fiji…) would span the globe;
   // leave those without an extent.
   const bbox = e - w > 180 ? null : [w, s, e, n].map(round)
-  out.push([info.name, round((s + n) / 2), round((w + e) / 2), "country", "", 0, bbox, []])
+  out.push([
+    info.name,
+    round((s + n) / 2),
+    round((w + e) / 2),
+    "country",
+    "",
+    0,
+    bbox,
+    [],
+  ])
 }
 
 // Local countries: everything named ---------------------------------------
-const NATURE = new Set(["MT", "MTS", "HLL", "ISL", "ISLS", "PEN", "LK", "RSV", "BCH", "CAPE"])
-const SPOTS = new Set(["AIRP", "HSP", "UNIV", "STDM", "MUS", "PRT", "MSQE", "TMPL", "CH"])
+const NATURE = new Set([
+  "MT",
+  "MTS",
+  "HLL",
+  "ISL",
+  "ISLS",
+  "PEN",
+  "LK",
+  "RSV",
+  "BCH",
+  "CAPE",
+])
+const SPOTS = new Set([
+  "AIRP",
+  "HSP",
+  "UNIV",
+  "STDM",
+  "MUS",
+  "PRT",
+  "MSQE",
+  "TMPL",
+  "CH",
+])
 const PARKS = new Set(["PRK", "RESV", "RESF", "RESN"])
 
 for (const cc of LOCAL_COUNTRIES) {
@@ -96,7 +139,8 @@ for (const cc of LOCAL_COUNTRIES) {
       else if (code === "ADM3") kind = "place"
     } else if (cls === "P") {
       if (code === "PPLX") kind = "place"
-      else if (code === "PPLC" || code === "PPLA" || pop >= 100000) kind = "city"
+      else if (code === "PPLC" || code === "PPLA" || pop >= 100000)
+        kind = "city"
       else if (code === "PPLA2" || pop >= 5000) kind = "town"
       else kind = "village"
     } else if (cls === "T" && NATURE.has(code)) kind = "nature"
@@ -113,7 +157,16 @@ for (const cc of LOCAL_COUNTRIES) {
             .filter((a) => /^[A-Za-z][A-Za-z .'-]{2,39}$/.test(a) && a !== name)
             .slice(0, 6)
         : []
-    out.push([name, round(+lat), round(+lon), kind, area(cc, a1, a2, name), pop, null, alts])
+    out.push([
+      name,
+      round(+lat),
+      round(+lon),
+      kind,
+      area(cc, a1, a2, name),
+      pop,
+      null,
+      alts,
+    ])
   }
 }
 
@@ -123,7 +176,16 @@ for (const r of rows("cities15000.txt")) {
   if (LOCAL_COUNTRIES.includes(cc)) continue
   const pop = Number(r[14]) || 0
   const kind = code === "PPLC" || pop >= 100000 ? "city" : "town"
-  out.push([name, round(+lat), round(+lon), kind, area(cc, a1, "", name), pop, null, []])
+  out.push([
+    name,
+    round(+lat),
+    round(+lon),
+    kind,
+    area(cc, a1, "", name),
+    pop,
+    null,
+    [],
+  ])
 }
 
 mkdirSync(join(root, "data"), { recursive: true })

@@ -199,10 +199,26 @@ export function useNisar({
   const cycles = coverage && coverage.layer === layer ? coverage.cycles : null
   const cycle = cycles?.[cycleIndex] ?? null
 
+  // Compare mode: date A on the main map, date B on the swipe side.
+  const [compare, setCompare] = React.useState<{
+    a: number
+    b: number
+    aLabel: string
+    bLabel: string
+  } | null>(null)
+  const cycleA = compare
+    ? (cycles?.find((c) => c.cycle === compare.a) ?? null)
+    : null
+  const cycleB = compare
+    ? (cycles?.find((c) => c.cycle === compare.b) ?? null)
+    : null
+  const shown = compare ? cycleA : cycle
+
   // Ground movement swaths are images; find where each one goes.
   React.useEffect(() => {
-    if (!cycle || layer !== "movement") return
-    for (const pass of cycle.passes) {
+    if (layer !== "movement") return
+    const wanted = [shown, cycleB].flatMap((c) => c?.passes ?? [])
+    for (const pass of wanted) {
       if (requested.current.has(pass.id)) continue
       requested.current.add(pass.id)
       fetch(`/api/sar/scene?granule=${encodeURIComponent(pass.id)}`)
@@ -216,15 +232,17 @@ export function useNisar({
           setScenes((s) => ({ ...s, [pass.id]: "error" }))
         })
     }
-  }, [cycle, layer])
+  }, [shown, cycleB, layer])
 
-  let pieces: SarTile[] = []
-  let waiting = 0
-  if (layer && cycle) {
+  /** The drawable pieces (swath images or GIBS days) of one cycle. */
+  const piecesFor = (c: SarCycle | null) => {
+    const pieces: SarTile[] = []
+    let waiting = 0
+    if (!layer || !c) return { pieces, waiting }
     if (layer === "signal") {
       // NASA GIBS serves one map layer per day; group the swaths by day.
       const days = new Map<string, Bbox>()
-      for (const p of cycle.passes) {
+      for (const p of c.passes) {
         const d = passDay(p)
         const b = days.get(d)
         days.set(
@@ -239,14 +257,16 @@ export function useNisar({
             : p.bbox
         )
       }
-      pieces = [...days].map(([day, bounds]) => ({
-        id: `signal-${day}`,
-        kind: "tiles",
-        tiles: gibsSignalTiles(day),
-        bounds,
-      }))
+      for (const [day, bounds] of days) {
+        pieces.push({
+          id: `signal-${day}`,
+          kind: "tiles",
+          tiles: gibsSignalTiles(day),
+          bounds,
+        })
+      }
     } else {
-      for (const p of cycle.passes) {
+      for (const p of c.passes) {
         const scene = scenes[p.id]
         if (!scene) waiting++
         if (!scene || scene === "error") continue
@@ -258,10 +278,20 @@ export function useNisar({
         })
       }
     }
+    return { pieces, waiting }
   }
 
+  const main = piecesFor(shown)
+  const side = piecesFor(cycleB)
   const overlay: SarOverlay | null =
-    layer && pieces.length ? { layer, pieces, opacity: 0.85 } : null
+    layer && main.pieces.length
+      ? { layer, pieces: main.pieces, opacity: 0.85 }
+      : null
+  const compareOverlay: SarOverlay | null =
+    layer && compare && side.pieces.length
+      ? { layer, pieces: side.pieces, opacity: 0.85 }
+      : null
+  const waiting = main.waiting + (compare ? side.waiting : 0)
 
   return {
     layer,
@@ -277,5 +307,8 @@ export function useNisar({
     /** Swaths still loading in the current cycle. */
     waiting,
     overlay,
+    compare,
+    setCompare,
+    compareOverlay,
   }
 }

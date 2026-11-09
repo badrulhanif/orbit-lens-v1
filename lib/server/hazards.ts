@@ -282,7 +282,11 @@ async function eonetEvents(
     .filter((e) => e.geometry.length > 0)
     .map((e) => {
       const latest = e.geometry[e.geometry.length - 1]
-      const [longitude, latitude] = centreOf(latest)
+      let [longitude, latitude] = centreOf(latest)
+      // Some GDACS records have latitude/longitude swapped.
+      if (Math.abs(latitude) > 90 && Math.abs(longitude) <= 90) {
+        ;[longitude, latitude] = [latitude, longitude]
+      }
       // "Flood in Malaysia 1104239" → "Flood in Malaysia"
       const name = e.title.replace(/\s+\d{5,}$/, "")
       return {

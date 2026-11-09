@@ -11,14 +11,17 @@ import "maplibre-gl/dist/maplibre-gl.css"
 
 import { circleRing, isArea, type DeviceLocation, type Place } from "@/lib/geo"
 import { styleFor, styleKey, type MapView } from "@/lib/map-styles"
+import { HAZARD_COLOR, type HistoryEvent } from "@/lib/area"
 import type { SarOverlay } from "@/lib/sar"
 
 export type FocusRequest = {
-  target: "device" | "picked" | "area"
+  target: "device" | "picked" | "area" | "point"
   /** Bump to re-run the same focus request. */
   nonce: number
   /** For "area": [west, south, east, north] to frame. */
   bbox?: [number, number, number, number]
+  /** For "point": where to fly to. */
+  point?: { latitude: number; longitude: number; zoom: number }
 }
 
 export type MapViewport = {
@@ -33,6 +36,12 @@ type MapCanvasProps = {
   device: DeviceLocation | null
   /** The place picked in search. Exact spots get a pin; areas are framed. */
   picked: Place | null
+  /** Hazard history markers for the picked area. */
+  events?: HistoryEvent[]
+  selectedEventId?: string | null
+  onSelectEvent?: (id: string) => void
+  /** Affected-area outline of the selected event, if it has one. */
+  outline?: [number, number][] | null
   sar: SarOverlay | null
   view: MapView
   theme: "light" | "dark"
@@ -40,6 +49,8 @@ type MapCanvasProps = {
   onViewportChange?: (viewport: MapViewport) => void
   /** Panels floating over the map that the camera should avoid. */
   obstructionRefs?: React.RefObject<HTMLElement | null>[]
+  /** The MapLibre map, once it has loaded (for the compare view). */
+  onMap?: (map: MapLibreMap | null) => void
 }
 
 const DEVICE_COLOR = "#0ea5e9" // sky-500
@@ -109,7 +120,7 @@ const pieceId = (id: string) => SAR_PREFIX + id.replace(/[^A-Za-z0-9_-]/g, "_")
  * source + layer. Pieces still wanted stay put (no flicker when panning);
  * pieces no longer wanted are removed; new ones are added on top.
  */
-function syncSarLayers(map: MapLibreMap, sar: SarOverlay | null) {
+export function syncSarLayers(map: MapLibreMap, sar: SarOverlay | null) {
   const wanted = new Map((sar?.pieces ?? []).map((p) => [pieceId(p.id), p]))
   const existing = (map.getStyle().layers ?? [])
     .map((l) => l.id)
@@ -165,6 +176,56 @@ function deviceMarkerElement() {
   el.innerHTML = `
     <span class="absolute inset-1 animate-ping rounded-full bg-sky-500/50"></span>
     <span class="relative size-4 rounded-full border-[3px] border-white bg-sky-500 shadow-md shadow-sky-900/40"></span>`
+  return el
+}
+
+const OUTLINE_SOURCE = "event-outline"
+
+function syncOutlineLayer(map: MapLibreMap, ring: [number, number][] | null) {
+  const data: FeatureCollection = {
+    type: "FeatureCollection",
+    features: ring?.length
+      ? [
+          {
+            type: "Feature",
+            properties: {},
+            geometry: { type: "Polygon", coordinates: [ring] },
+          },
+        ]
+      : [],
+  }
+  const source = map.getSource(OUTLINE_SOURCE) as GeoJSONSource | undefined
+  if (source) {
+    source.setData(data)
+    return
+  }
+  map.addSource(OUTLINE_SOURCE, { type: "geojson", data })
+  map.addLayer({
+    id: "event-outline-fill",
+    type: "fill",
+    source: OUTLINE_SOURCE,
+    paint: { "fill-color": "#2563eb", "fill-opacity": 0.12 },
+  })
+  map.addLayer({
+    id: "event-outline-line",
+    type: "line",
+    source: OUTLINE_SOURCE,
+    paint: { "line-color": "#2563eb", "line-width": 2 },
+  })
+}
+
+/** Small coloured dot for a past hazard; ringed when selected. */
+function eventMarkerElement(ev: HistoryEvent) {
+  const el = document.createElement("button")
+  el.type = "button"
+  el.title = `${ev.title} (${ev.date?.slice(0, 4) ?? "date unknown"})`
+  el.setAttribute("aria-label", el.title)
+  el.className =
+    // No transform/scale on this element: MapLibre positions markers with a
+    // CSS transform, and scaling here would scale the position too.
+    "group grid size-5 cursor-pointer place-items-center rounded-full"
+  const color = HAZARD_COLOR[ev.type]
+  el.innerHTML = `<span style="background:${color};opacity:${ev.inside ? 1 : 0.55}" class="block size-3.5 rounded-full border-2 border-white shadow-md shadow-black/30 transition-transform group-hover:scale-125 group-data-[selected=true]:scale-150 group-data-[selected=true]:ring-2 group-data-[selected=true]:ring-orange-500"></span>`
   return el
 }
 
@@ -234,6 +295,9 @@ const mercY = (lat: number) => {
   return 0.5 - Math.log((1 + s) / (1 - s)) / (4 * Math.PI)
 }
 
+const mercYToLat = (y: number) =>
+  (Math.atan(Math.sinh(Math.PI * (1 - 2 * y))) * 180) / Math.PI
+
 /**
  * Zoom that fits a lon/lat box into the free part of the screen, worked out
  * directly in Web Mercator. (MapLibre's own fitBounds/cameraForBounds leave
@@ -256,22 +320,37 @@ function zoomToFit(
 export function MapCanvas({
   device,
   picked,
+  events = [],
+  selectedEventId = null,
+  onSelectEvent,
+  outline = null,
   sar,
   view,
   theme,
   focus,
   onViewportChange,
   obstructionRefs,
+  onMap,
 }: MapCanvasProps) {
   const containerRef = React.useRef<HTMLDivElement>(null)
   const mapRef = React.useRef<MapLibreMap | null>(null)
   const libRef = React.useRef<typeof import("maplibre-gl") | null>(null)
   const deviceMarker = React.useRef<MapLibreMarker | null>(null)
   const pinMarker = React.useRef<MapLibreMarker | null>(null)
+  const eventMarkers = React.useRef(new Map<string, MapLibreMarker>())
+  const onSelectEventRef = React.useRef(onSelectEvent)
+  React.useEffect(() => {
+    onSelectEventRef.current = onSelectEvent
+  }, [onSelectEvent])
   const deviceRef = React.useRef(device)
   const sarRef = React.useRef(sar)
+  const outlineRef = React.useRef(outline)
   const styleRef = React.useRef({ view, theme })
   const callbacks = React.useRef({ onViewportChange })
+  const onMapRef = React.useRef(onMap)
+  React.useEffect(() => {
+    onMapRef.current = onMap
+  }, [onMap])
   const [ready, setReady] = React.useState(false)
 
   React.useEffect(() => {
@@ -312,6 +391,7 @@ export function MapCanvas({
         if (!map) return
         map.setProjection({ type: "globe" })
         syncSarLayers(map, sarRef.current)
+        syncOutlineLayer(map, outlineRef.current)
         syncAccuracyLayer(map, deviceRef.current)
       })
       map.on("moveend", () => {
@@ -333,7 +413,9 @@ export function MapCanvas({
         })
       })
       map.once("load", () => {
-        if (!cancelled) setReady(true)
+        if (cancelled) return
+        setReady(true)
+        onMapRef.current?.(map)
       })
       // NASA's tile server sometimes fails a tile at a swath's edge; that's
       // just a gap, not an app error.
@@ -348,6 +430,7 @@ export function MapCanvas({
 
     return () => {
       cancelled = true
+      onMapRef.current?.(null)
       map?.remove()
       mapRef.current = null
       deviceMarker.current = null
@@ -427,6 +510,49 @@ export function MapCanvas({
     }
   }, [device, ready])
 
+  // Outline of the selected flood's affected area.
+  React.useEffect(() => {
+    outlineRef.current = outline
+    const map = mapRef.current
+    if (!ready || !map) return
+    if (map.getSource(OUTLINE_SOURCE) || map.isStyleLoaded()) {
+      syncOutlineLayer(map, outline)
+    }
+  }, [outline, ready])
+
+  // Hazard history markers.
+  React.useEffect(() => {
+    const map = mapRef.current
+    const lib = libRef.current
+    const markers = eventMarkers.current
+    if (!ready || !map || !lib) return
+    for (const m of markers.values()) m.remove()
+    markers.clear()
+    for (const ev of events) {
+      // Never let one bad record take the map down.
+      if (Math.abs(ev.latitude) > 90 || Math.abs(ev.longitude) > 180) continue
+      const el = eventMarkerElement(ev)
+      el.addEventListener("click", (e) => {
+        e.stopPropagation()
+        onSelectEventRef.current?.(ev.id)
+      })
+      markers.set(
+        ev.id,
+        new lib.Marker({ element: el })
+          .setLngLat([ev.longitude, ev.latitude])
+          .addTo(map)
+      )
+    }
+  }, [events, ready])
+
+  React.useEffect(() => {
+    for (const [id, m] of eventMarkers.current) {
+      const el = m.getElement()
+      el.dataset.selected = String(id === selectedEventId)
+      el.style.zIndex = id === selectedEventId ? "3" : ""
+    }
+  }, [selectedEventId, events, ready])
+
   // Pin for an exact spot (an address, a building, a hazard event). Areas
   // like states or cities have no single point worth pinning.
   React.useEffect(() => {
@@ -463,8 +589,22 @@ export function MapCanvas({
     ]
     const tilt = view === "3d" ? { pitch: 60 } : {}
 
-    const go = (lon: number, lat: number, zoom: number) =>
-      map.flyTo({ center: [lon, lat], zoom, offset, speed: 1.4, ...tilt })
+    // flyTo's own `offset` overshoots on the globe view, so shift the camera
+    // centre ourselves: the target should land `offset` px from the middle.
+    const go = (lon: number, lat: number, zoom: number) => {
+      const worldPx = 512 * 2 ** zoom
+      const x = mercX(lon) - offset[0] / worldPx
+      const y = Math.min(
+        0.999,
+        Math.max(0.001, mercY(lat) - offset[1] / worldPx)
+      )
+      map.flyTo({
+        center: [x * 360 - 180, mercYToLat(y)],
+        zoom,
+        speed: 1.4,
+        ...tilt,
+      })
+    }
 
     const frame = (bbox: [number, number, number, number], maxZoom: number) => {
       const [w, s, e, n] = bbox
@@ -488,6 +628,8 @@ export function MapCanvas({
       )
     } else if (focus.target === "area" && focus.bbox) {
       frame(focus.bbox, 12)
+    } else if (focus.target === "point" && focus.point) {
+      go(focus.point.longitude, focus.point.latitude, focus.point.zoom)
     } else if (focus.target === "picked" && picked) {
       if (picked.bbox) frame(picked.bbox, 16)
       // Gazetteer places say how close to zoom (state 8 … village 14).

@@ -57,6 +57,8 @@ export type Place = LatLng & {
   address: string
   /** [west, south, east, north] for areas like cities; null for points. */
   bbox: [number, number, number, number] | null
+  /** States/districts: key of their outline in data/boundaries.json. */
+  boundaryKey?: string
   /** How close to zoom when picked, if there's no bbox. */
   zoom?: number
   /** Hazard events: when it happened (ISO). */

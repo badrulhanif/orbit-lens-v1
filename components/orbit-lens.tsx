@@ -3,6 +3,7 @@
 import * as React from "react"
 import { useTheme } from "next-themes"
 
+import { AreaPanel } from "@/components/area-panel"
 import { LocationCard } from "@/components/location-card"
 import { LocationConsentDialog } from "@/components/location-consent-dialog"
 import {
@@ -10,15 +11,18 @@ import {
   type FocusRequest,
   type MapViewport,
 } from "@/components/map-canvas"
+import { CompareMap } from "@/components/compare-map"
 import { MapControls } from "@/components/map-controls"
 import { PlaceSearch, type SearchBias } from "@/components/place-search"
 import { SarLegend } from "@/components/sar-legend"
 import { SarPassNav } from "@/components/sar-pass-nav"
+import { useArea } from "@/hooks/use-area"
 import { useDeviceLocation } from "@/hooks/use-device-location"
 import { useMapView } from "@/hooks/use-map-view"
 import { useNisar } from "@/hooks/use-nisar"
 import type { HazardIntent, Place } from "@/lib/geo"
 import type { SarCycle } from "@/lib/sar"
+import type { Map as MapLibreMap } from "maplibre-gl"
 
 // Record the visit (IP goes to the server log only) once per page load.
 let visitLogged = false
@@ -92,6 +96,7 @@ export function OrbitLens() {
   }, [])
 
   function pick(place: Place) {
+    setSelectedEventId(null)
     setPicked(place)
     focusOn("picked")
     // A hazard event: show its radar layer, on the pass nearest the event.
@@ -122,11 +127,78 @@ export function OrbitLens() {
 
   const radarOn = nisar.layer !== null
 
+  // Compare mode: the map instance (for the swipe view) and the handle.
+  const [mainMap, setMainMap] = React.useState<MapLibreMap | null>(null)
+  const [split, setSplit] = React.useState(0.5)
+  // (The React Compiler memoizes this; no manual useMemo needed.)
+  const compareControls = {
+    nisar,
+    split,
+    onSplitChange: setSplit,
+    onFocus: (bbox: [number, number, number, number]) => focusOn("area", bbox),
+  }
+  const comparing = nisar.compare !== null
+
+  // Hazard history for the picked place (the left panel).
+  const area = useArea(picked)
+  const [selectedEventId, setSelectedEventId] = React.useState<string | null>(
+    null
+  )
+  const [searchKey, setSearchKey] = React.useState(0)
+  const events = React.useMemo(
+    () => area.history.data?.events ?? [],
+    [area.history.data]
+  )
+
+  function selectEvent(id: string | null) {
+    if (!id) {
+      // Back to the area.
+      setSelectedEventId(null)
+      focusOn("picked")
+      return
+    }
+    const ev = events.find((e) => e.id === id)
+    if (!ev) return
+    setSelectedEventId(id)
+    if (ev.outline?.length) {
+      // Floods with a known extent: frame the whole affected area.
+      const lons = ev.outline.map((p) => p[0])
+      const lats = ev.outline.map((p) => p[1])
+      focusOn("area", [
+        Math.min(...lons),
+        Math.min(...lats),
+        Math.max(...lons),
+        Math.max(...lats),
+      ])
+      return
+    }
+    setFocus((prev) => ({
+      target: "point",
+      // Feed records (quakes) are regional; named events are precise.
+      point: {
+        latitude: ev.latitude,
+        longitude: ev.longitude,
+        zoom: ev.source === "Wikipedia" || ev.source === "Wikidata" ? 13 : 9,
+      },
+      nonce: (prev?.nonce ?? 0) + 1,
+    }))
+  }
+
+  function closeArea() {
+    setPicked(null)
+    setSelectedEventId(null)
+    setSearchKey((k) => k + 1)
+  }
+
   return (
     <main className="relative h-svh w-full overflow-hidden bg-background">
       <MapCanvas
         device={location.position}
         picked={picked}
+        events={events}
+        selectedEventId={selectedEventId}
+        onSelectEvent={selectEvent}
+        outline={events.find((e) => e.id === selectedEventId)?.outline ?? null}
         sar={nisar.overlay}
         view={view}
         theme={theme}
@@ -136,27 +208,54 @@ export function OrbitLens() {
           nisar.onViewportChange(v)
         }}
         obstructionRefs={[searchPanelRef, controlsRef, passNavRef, legendRef]}
+        onMap={setMainMap}
       />
+
+      {comparing && (
+        <CompareMap
+          mainMap={mainMap}
+          overlay={nisar.compareOverlay}
+          view={view}
+          theme={theme}
+          split={split}
+          onSplitChange={setSplit}
+          beforeLabel={nisar.compare?.aLabel ?? ""}
+          afterLabel={nisar.compare?.bLabel ?? ""}
+        />
+      )}
 
       {/* Top-left: search and your location */}
       <aside className="pointer-events-none absolute inset-x-3 top-3 z-10 sm:inset-x-auto sm:top-4 sm:left-4 sm:w-96">
         <div
           ref={searchPanelRef}
-          className="pointer-events-auto flex flex-col gap-2"
+          className="pointer-events-auto flex max-h-[55svh] flex-col gap-2 sm:max-h-[calc(100svh-6rem)]"
         >
           <PlaceSearch
+            key={searchKey}
             className="shrink-0"
             getBias={getBias}
             origin={location.position}
             onPick={pick}
             onHazard={showHazard}
-            onClear={() => setPicked(null)}
+            onClear={closeArea}
           />
-          <LocationCard
-            className="shrink-0"
-            location={location}
-            onShow={() => focusOn("device")}
-          />
+          {picked ? (
+            <AreaPanel
+              key={picked.id}
+              place={picked}
+              area={area}
+              compare={compareControls}
+              selectedEventId={selectedEventId}
+              onSelectEvent={selectEvent}
+              onClose={closeArea}
+            />
+          ) : (
+            <LocationCard
+              className="shrink-0"
+              location={location}
+              onShow={() => focusOn("device")}
+            />
+          )}
         </div>
       </aside>
 
@@ -167,7 +266,7 @@ export function OrbitLens() {
         bottom-right.
       */}
       <div className="pointer-events-none absolute right-14 bottom-3 left-3 z-10 flex flex-col gap-2 sm:contents">
-        {radarOn && (
+        {radarOn && !comparing && (
           <div
             ref={passNavRef}
             className="pointer-events-auto sm:absolute sm:bottom-4 sm:left-4 sm:z-10 sm:w-88 lg:left-1/2 lg:-translate-x-1/2"

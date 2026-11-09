@@ -93,9 +93,13 @@ export type SarOverlay = {
   opacity: number
 }
 
-/** NISAR backscatter tiles from NASA GIBS, one day of passes per date. */
+/**
+ * NISAR backscatter tiles (NASA GIBS, via our caching proxy) for one day.
+ * MapLibre needs an absolute URL.
+ */
 export function gibsSignalTiles(date: string) {
-  return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/NISAR_L2_Geocoded_Polarimetric_Covariance/default/${date}/GoogleMapsCompatible_Level13/{z}/{y}/{x}.png`
+  const origin = typeof window === "undefined" ? "" : window.location.origin
+  return `${origin}/api/sar/tiles/${date}/{z}/{x}/{y}`
 }
 
 const DAY = new Intl.DateTimeFormat("en-GB", {
