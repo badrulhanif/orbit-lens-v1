@@ -1,8 +1,12 @@
 import type { AreaData } from "@/hooks/use-area"
+import { appById, inFilter, type HazardFilter } from "@/lib/apps"
 import {
   formatEventDate,
   HAZARD_LABEL,
+  inPeriod,
+  PERIODS,
   precisionOf,
+  type Period,
   type HazardType,
   type HistoryEvent,
   type Impact,
@@ -183,6 +187,8 @@ export function areaReport({
   offshore,
   live,
   analysisLines,
+  filter,
+  period,
 }: {
   place: Place
   area: AreaData
@@ -190,8 +196,38 @@ export function areaReport({
   offshore: HistoryEvent[]
   live: HistoryEvent[]
   analysisLines: string[]
+  /** Same as the panel: which hazards and how far back. */
+  filter: HazardFilter
+  period: Period
 }): ReportDoc {
+  const keep = (e: HistoryEvent) =>
+    inFilter(e.type, filter) && inPeriod(e.date, period)
+  onshore = onshore.filter(keep)
+  offshore = offshore.filter(keep)
   const history = [...onshore, ...offshore]
+  const hazards =
+    filter === "all" ? "All hazards" : `${appById(filter).label} only`
+  const periodLabel = PERIODS.find((p) => p.id === period)!.label
+  const scope: ReportSection = {
+    heading: "This report covers",
+    blocks: [
+      {
+        kind: "list",
+        items: [
+          `Place: ${place.name}${place.area ? ` (${place.area})` : ""}, ${
+            place.boundaryKey
+              ? "inside its official outline (land and state waters)"
+              : "the area framed on the map"
+          }.`,
+          `Hazards: ${hazards}. Period: ${periodLabel.toLowerCase()}${
+            period === "all" ? " (records from 1970 onwards)" : ""
+          }.`,
+          "Happening now: weather warnings and open relief centres at the time this report was made.",
+          "Radar: the latest NISAR passes over the area.",
+        ],
+      },
+    ],
+  }
   const warnings = area.history.data?.warnings ?? []
   const name = place.name
   const dated = onshore.filter((e) => e.date)
@@ -211,8 +247,8 @@ export function areaReport({
   const summary: string[] = []
   summary.push(
     onshore.length
-      ? `${plural(onshore.length, "hazard event")} recorded in ${name}${since ? ` since ${since}` : ""}: ${mix(onshore)}.`
-      : `No hazard events recorded in ${name} in these sources.`
+      ? `${plural(onshore.length, "hazard event")} recorded in ${name}${period === "all" && since ? ` since ${since}` : ""} (${periodLabel.toLowerCase()}): ${mix(onshore)}.`
+      : `No ${filter === "all" ? "hazard events" : `${appById(filter).label.toLowerCase()} events`} recorded in ${name} for ${periodLabel.toLowerCase()} in these sources.`
   )
   if (offshore.length)
     summary.push(
@@ -263,6 +299,7 @@ export function areaReport({
     subtitle: [place.kind, place.area].filter(Boolean).join(" · "),
     generated: now(),
     sections: [
+      scope,
       {
         heading: "Summary",
         blocks: [

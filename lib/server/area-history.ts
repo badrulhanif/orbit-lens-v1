@@ -370,6 +370,8 @@ export async function areaHistory(
   const offshore = await Promise.all(inside.map((e) => isOffshore(e)))
   const out = inside.map((e, i) => (offshore[i] ? { ...e, offshore: true } : e))
 
+  const [kind, name] = boundaryKey?.split("|") ?? []
+
   // Floods with impacts reported here by the agencies: say what, and add
   // those whose GDACS point is elsewhere.
   const ids = new Map(out.map((e, i) => [e.id, i]))
@@ -377,7 +379,13 @@ export async function areaHistory(
     for (const f of floods) {
       if (!f.impacts?.length) continue
       const here = []
-      for (const i of f.impacts) if (await match(i.region)) here.push(i)
+      const places = new Set<string>()
+      for (const i of f.impacts) {
+        const inside = await match.parts(i.region, { near: f })
+        if (!inside.length) continue
+        here.push(i)
+        inside.forEach((p) => places.add(p))
+      }
       if (!here.length) continue
       const at = ids.get(f.id)
       if (at !== undefined) {
@@ -387,12 +395,16 @@ export async function areaHistory(
         }
         continue
       }
-      // Named after where it was reported here; its map point (and the
-      // original title) belongs to another place.
-      const places = [...new Set(here.map((i) => i.region))]
+      // Named after the places inside this area that reported it (the most
+      // specific ones); its map point and original title belong elsewhere.
+      const named = [...places]
+      const specific = named.filter(
+        (p) => normaliseRegion(p) !== normaliseRegion(name ?? "")
+      )
+      const shown = specific.length ? specific : named
       out.push({
         ...f,
-        title: `Flood in ${places.slice(0, 2).join(" and ")}${places.length > 2 ? ` +${places.length - 2}` : ""}`,
+        title: `Flood in ${shown.slice(0, 2).join(" and ")}${shown.length > 2 ? ` +${shown.length - 2}` : ""}`,
         scope: "reported",
         outline: null,
         detail: `Reported here: ${impactSentence(here, 3)} · part of a wider flood`,
@@ -401,12 +413,11 @@ export async function areaHistory(
   }
 
   // Relief centres open now, by the state and district JKM gives.
-  const [kind, name] = boundaryKey?.split("|") ?? []
   for (const { event, state, district } of centres.value) {
     const here = match
       ? kind === "state"
         ? normaliseRegion(state) === normaliseRegion(name)
-        : await match(district, state)
+        : await match(district, { state })
       : !event.scope && inBox(event, bbox)
     if (here) out.push(event)
   }

@@ -22,6 +22,7 @@ import {
 } from "@/components/ui/popover"
 import { useJson } from "@/hooks/use-json"
 import { placeLink, useWatches, type StoredAlert } from "@/hooks/use-watches"
+import { TOPICS, type Topic } from "@/lib/alerts"
 import type { AreaHistory } from "@/lib/area"
 import type { Place } from "@/lib/geo"
 import { cn } from "@/lib/utils"
@@ -219,7 +220,7 @@ export function AlertsBell({
 }
 
 /** Sign up for email alerts about one place (a confirm link is emailed). */
-function useEmailSignup(link: string) {
+function useEmailSignup(link: string, topics?: Topic[]) {
   const [email, setEmail] = React.useState("")
   const [state, setState] = React.useState<
     "idle" | "sending" | "sent" | string
@@ -230,7 +231,7 @@ function useEmailSignup(link: string) {
     const res = await fetch("/api/alerts/subscribe", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ email, link }),
+      body: JSON.stringify({ email, link, topics }),
     }).catch(() => null)
     const body = (await res?.json().catch(() => null)) as {
       error?: string
@@ -310,7 +311,8 @@ export function WatchButton({
   const features = useFeatures()
   const on = w.isWatching(place)
   const [open, setOpen] = React.useState(false)
-  const f = useEmailSignup(placeLink(place))
+  const topics = w.topicsOf(place)
+  const f = useEmailSignup(placeLink(place), topics)
   const label = on
     ? `Watching ${place.name}`
     : w.full
@@ -347,6 +349,38 @@ export function WatchButton({
           <p className="text-muted-foreground">
             New weather warnings, relief centres and events here will show under
             the bell next to the search box.
+          </p>
+        </div>
+        <div className="grid gap-1.5">
+          <p className="font-medium">Alert me about</p>
+          <div className="flex flex-wrap gap-1">
+            {TOPICS.map((t) => {
+              const on = topics.includes(t.id)
+              return (
+                <button
+                  key={t.id}
+                  type="button"
+                  aria-pressed={on}
+                  onClick={() =>
+                    w.setTopics(
+                      place,
+                      on ? topics.filter((x) => x !== t.id) : [...topics, t.id]
+                    )
+                  }
+                  className={cn(
+                    "rounded-full border px-2 py-0.5 text-[11px] transition-colors",
+                    on
+                      ? "border-orange-600 bg-orange-600 text-white"
+                      : "text-muted-foreground hover:bg-muted"
+                  )}
+                >
+                  {t.label}
+                </button>
+              )
+            })}
+          </div>
+          <p className="text-[11px] text-muted-foreground">
+            Emails use the topics picked here when you sign up.
           </p>
         </div>
         {features.email &&

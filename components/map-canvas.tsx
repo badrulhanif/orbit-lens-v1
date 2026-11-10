@@ -450,6 +450,11 @@ export function MapCanvas({
       })
       map.once("load", () => {
         if (cancelled) return
+        // Start with the credits folded into their (i) button: open, they
+        // cover the bottom of a phone screen.
+        containerRef.current
+          ?.querySelector(".maplibregl-compact-show")
+          ?.classList.remove("maplibregl-compact-show")
         setReady(true)
         onMapRef.current?.(map)
       })

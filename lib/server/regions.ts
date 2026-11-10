@@ -1,3 +1,4 @@
+import type { LatLng } from "@/lib/geo"
 import { loadBoundaries } from "@/lib/server/boundaries"
 import { gazetteerPlace } from "@/lib/server/gazetteer"
 
@@ -77,18 +78,27 @@ function load() {
 
 const resolved = new Map<string, Promise<Resolved | null>>()
 
-/** Where a named place is: its state, and district when known. */
-function resolve(name: string): Promise<Resolved | null> {
-  let hit = resolved.get(name)
+/**
+ * Where a named place is: its state, and district when known. `near` (where
+ * the report came from) picks between same-named kampungs.
+ */
+function resolve(name: string, near?: LatLng | null): Promise<Resolved | null> {
+  const key = near
+    ? `${name}|${near.latitude.toFixed(1)},${near.longitude.toFixed(1)}`
+    : name
+  let hit = resolved.get(key)
   if (!hit) {
-    hit = lookup(name).catch(() => null)
+    hit = lookup(name, near).catch(() => null)
     if (resolved.size > 5000) resolved.clear()
-    resolved.set(name, hit)
+    resolved.set(key, hit)
   }
   return hit
 }
 
-async function lookup(name: string): Promise<Resolved | null> {
+async function lookup(
+  name: string,
+  near?: LatLng | null
+): Promise<Resolved | null> {
   const n = normaliseRegion(name)
   if (!n || n === "malaysia") return null
   const { states, districts } = await load()
@@ -96,7 +106,7 @@ async function lookup(name: string): Promise<Resolved | null> {
   const d = districts.get(n)
   if (d) return d
   // A town: "Taiping" → Larut Matang & Selama, Perak.
-  const place = await gazetteerPlace(name)
+  const place = await gazetteerPlace(name, near)
   if (!place) return null
   const parts = place.area
     .split(", ")
@@ -110,8 +120,9 @@ async function lookup(name: string): Promise<Resolved | null> {
 
 /**
  * A test for whether a place name (or a list, "Kedah, Penang") lies in the
- * area of a boundary key ("state|Johor|Malaysia" or a district). Null when
- * the key isn't a Malaysian state or district.
+ * area of a boundary key ("state|Johor|Malaysia" or a district), and which
+ * of the listed names do (`.parts`). Null when the key isn't a Malaysian
+ * state or district.
  */
 export async function regionMatcher(boundaryKey: string | null | undefined) {
   const [kind, name, area] = boundaryKey?.split("|") ?? []
@@ -120,25 +131,35 @@ export async function regionMatcher(boundaryKey: string | null | undefined) {
   const target = normaliseRegion(name)
   const targetState =
     kind === "state" ? target : normaliseRegion(area.split(",")[0])
-  const cache = new Map<string, boolean>()
-  return async (names: string, state?: string) => {
-    const key = `${names}|${state ?? ""}`
-    const hit = cache.get(key)
-    if (hit !== undefined) return hit
-    let found = false
-    for (const part of names.split(",")) {
-      const r = await resolve(part)
-      // A JKM row names its state too; trust it over a same-named town.
-      const s = state ? normaliseRegion(state) : r?.state
-      if (!r || s !== targetState) continue
-      if (kind === "state" || r.district === target) {
-        found = true
-        break
-      }
+  type Opts = { state?: string; near?: LatLng | null }
+  const cache = new Map<string, Promise<string[]>>()
+  const parts = (names: string, { state, near }: Opts = {}) => {
+    const key = `${names}|${state ?? ""}|${near?.latitude},${near?.longitude}`
+    let hit = cache.get(key)
+    if (!hit) {
+      hit = (async () => {
+        const inside: string[] = []
+        for (const raw of names.split(",")) {
+          const part = raw.trim()
+          const r = part ? await resolve(part, near) : null
+          // A JKM row names its state too; trust it over a same-named town.
+          const s = state ? normaliseRegion(state) : r?.state
+          if (
+            r &&
+            s === targetState &&
+            (kind === "state" || r.district === target)
+          )
+            inside.push(part)
+        }
+        return inside
+      })()
+      cache.set(key, hit)
     }
-    cache.set(key, found)
-    return found
+    return hit
   }
+  const match = async (names: string, opts?: Opts) =>
+    (await parts(names, opts)).length > 0
+  return Object.assign(match, { parts })
 }
 
 /** The ways the area's name may be written in a warning text. */

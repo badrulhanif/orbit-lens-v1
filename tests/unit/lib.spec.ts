@@ -139,3 +139,48 @@ test("alerts: nothing the first time, then only what's new", async () => {
   expect(alerts.map((a) => a.kind).sort()).toEqual(["event", "warning"])
   expect(newAlerts(snapshotOf(later), later)).toEqual([])
 })
+
+test("short periods: last 7 and 30 days", () => {
+  const day = (n: number) =>
+    new Date(Date.now() - n * 86_400_000).toISOString().slice(0, 10)
+  expect(inPeriod(day(3), "7d")).toBe(true)
+  expect(inPeriod(day(10), "7d")).toBe(false)
+  expect(inPeriod(day(10), "30d")).toBe(true)
+  expect(inPeriod(day(40), "30d")).toBe(false)
+})
+
+test("alerts only cover the topics picked", async () => {
+  const { newAlerts, snapshotOf } = await import("@/lib/alerts")
+  const today = new Date().toISOString().slice(0, 10)
+  const base = {
+    bbox: [0, 0, 1, 1] as [number, number, number, number],
+    searched: [0, 0, 1, 1] as [number, number, number, number],
+    sources: [],
+    warnings: [],
+    events: [],
+  }
+  const later = {
+    ...base,
+    warnings: [
+      {
+        id: "w",
+        title: "Rain",
+        issued: "",
+        validFrom: null,
+        validTo: null,
+        text: "",
+      },
+    ],
+    events: [
+      event({ id: "f", type: "flood", date: today }),
+      event({ id: "q", type: "earthquake", source: "USGS", date: today }),
+    ],
+  }
+  const kinds = (topics: Parameters<typeof newAlerts>[2]) =>
+    newAlerts(snapshotOf(base), later, topics)
+      .map((a) => a.id)
+      .sort()
+  expect(kinds(["flood"])).toEqual(["f"])
+  expect(kinds(["earthquake", "warnings"])).toEqual(["q", "w"])
+  expect(kinds(undefined)).toEqual(["f", "q", "w"])
+})

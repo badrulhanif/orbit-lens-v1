@@ -164,3 +164,11 @@
     cursor: pointer;
   }
 }
+
+/* Phones: pinch to zoom, so the zoom buttons only take space. */
+@media (max-width: 639px) {
+  .maplibregl-ctrl-zoom-in,
+  .maplibregl-ctrl-zoom-out {
+    display: none !important;
+  }
+}

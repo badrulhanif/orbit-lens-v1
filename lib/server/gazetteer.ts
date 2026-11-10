@@ -292,16 +292,21 @@ export async function nearestTown(latitude: number, longitude: number) {
  * A Malaysian place by exact name ("Taiping", "Pontian District"), the
  * biggest kind first: { kind, area: "Larut Matang & Selama, Perak, Malaysia" }.
  */
-export async function gazetteerPlace(name: string) {
+export async function gazetteerPlace(name: string, near?: LatLng | null) {
   const q = normaliseName(
     name.replace(/\b(district|daerah|jajahan|bahagian)\b/gi, " ")
   )
   if (q.length < 3) return null
   const entries = await load()
+  // Many kampung names repeat across states; near a known point (where
+  // a flood was reported), the closest one is meant.
+  const away = (r: Row) =>
+    near ? Math.hypot(r[1] - near.latitude, r[2] - near.longitude) : 0
   let best: Row | null = null
   for (const { row, keys } of entries) {
     if (!row[4].endsWith("Malaysia") || !keys.includes(q)) continue
-    if (!best || RANK[row[3]] < RANK[best[3]]) best = row
+    if (!best || (near ? away(row) < away(best) : RANK[row[3]] < RANK[best[3]]))
+      best = row
   }
   return best ? { kind: best[3], area: best[4] } : null
 }

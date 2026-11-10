@@ -7,7 +7,7 @@ import { areaHistory } from "@/lib/server/area-history"
 export type Watch = {
   id: string
   email: string
-  place: { name: string; link: string }
+  place: { name: string; link: string; topics?: string[] }
   token: string
   confirmed: boolean
   snapshot: Snapshot | null

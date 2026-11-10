@@ -209,26 +209,35 @@ export function areaQuery(bbox: Bbox, boundaryKey?: string | null) {
 }
 
 /** How far back the list, stats and map look. */
-export type Period = "all" | "1y" | "5y" | "10y"
+export type Period = "all" | "7d" | "30d" | "1y" | "5y" | "10y"
 
 export const PERIODS: { id: Period; label: string }[] = [
   { id: "all", label: "All time" },
+  { id: "7d", label: "Last 7 days" },
+  { id: "30d", label: "Last 30 days" },
   { id: "1y", label: "Last 12 months" },
   { id: "5y", label: "Last 5 years" },
   { id: "10y", label: "Last 10 years" },
 ]
 
-const YEARS: Record<Exclude<Period, "all">, number> = {
-  "1y": 1,
-  "5y": 5,
-  "10y": 10,
+const SPAN: Record<
+  Exclude<Period, "all">,
+  { days?: number; years?: number }
+> = {
+  "7d": { days: 7 },
+  "30d": { days: 30 },
+  "1y": { years: 1 },
+  "5y": { years: 5 },
+  "10y": { years: 10 },
 }
 
 export function inPeriod(date: string | null, period: Period) {
   if (period === "all") return true
   if (!date) return false
   const cut = new Date()
-  cut.setFullYear(cut.getFullYear() - YEARS[period])
+  const { days, years } = SPAN[period]
+  if (days) cut.setDate(cut.getDate() - days)
+  if (years) cut.setFullYear(cut.getFullYear() - years)
   // ISO strings compare in date order ("2021-12" or "2021-12-16").
   return date >= cut.toISOString().slice(0, date.length >= 10 ? 10 : 7)
 }

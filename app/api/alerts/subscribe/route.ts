@@ -1,5 +1,6 @@
 import { randomBytes } from "node:crypto"
 
+import { cleanTopics, TOPICS } from "@/lib/alerts"
 import { fromSearch } from "@/lib/share"
 import {
   appUrl,
@@ -25,6 +26,7 @@ export async function POST(request: Request) {
   const body = (await request.json().catch(() => null)) as {
     email?: string
     link?: string
+    topics?: unknown
   } | null
   const email = body?.email?.trim().toLowerCase() ?? ""
   const view = fromSearch(body?.link ?? "")
@@ -40,11 +42,15 @@ export async function POST(request: Request) {
         { status: 429 }
       )
     const token = randomBytes(24).toString("base64url")
+    const topics = cleanTopics(body?.topics)
     await insert("watches", {
       email,
-      place: { name: view.place.name, link },
+      place: { name: view.place.name, link, topics },
       token,
     })
+    const about = TOPICS.filter((t) => topics.includes(t.id))
+      .map((t) => t.label.toLowerCase())
+      .join(", ")
     const app = appUrl(request)
     await sendEmail(
       email,
@@ -52,7 +58,7 @@ export async function POST(request: Request) {
       emailHtml(
         `Alerts for ${view.place.name}`,
         [
-          `Someone (hopefully you) asked Orbit Lens to email this address when something new happens in <b>${escapeHtml(view.place.name)}</b>: weather warnings, relief centres opening, new floods or earthquakes.`,
+          `Someone (hopefully you) asked Orbit Lens to email this address when something new happens in <b>${escapeHtml(view.place.name)}</b>: ${escapeHtml(about)}.`,
           "Confirm to start. If this wasn't you, ignore this email and nothing will be sent.",
         ],
         {

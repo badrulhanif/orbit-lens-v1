@@ -25,12 +25,15 @@ export function Report({
   fileName,
   events,
   bbox,
+  scope,
 }: {
   loading: boolean
   doc: ReportDoc
   fileName: string
   events: HistoryEvent[]
   bbox?: Bbox | null
+  /** Controls for what the report covers (period). */
+  scope?: React.ReactNode
 }) {
   const [copied, setCopied] = React.useState(false)
   if (loading) return <Loading>Putting the report together…</Loading>
@@ -74,6 +77,12 @@ export function Report({
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-3">
+      {scope && (
+        <div className="flex flex-wrap items-center gap-2 text-xs text-muted-foreground">
+          {scope}
+          <span>Hazards follow the filter above.</span>
+        </div>
+      )}
       <div className="flex flex-wrap gap-1.5">
         {buttons.map(([label, icon, onClick, disabled]) => (
           <Button

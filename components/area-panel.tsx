@@ -5,6 +5,8 @@ import {
   ArrowDownUpIcon,
   CalendarIcon,
   ArrowLeftRightIcon,
+  ChevronDownIcon,
+  ChevronUpIcon,
   ChevronLeftIcon,
   ExternalLinkIcon,
   XIcon,
@@ -89,40 +91,47 @@ export function AreaPanel({
 }: AreaPanelProps) {
   const events = area.history.data?.events ?? []
   const selected = events.find((e) => e.id === selectedEventId) ?? null
+  // Phones: the card can fold down to its header to show the map.
+  const [folded, setFolded] = React.useState(false)
 
   return (
     <HoverContext.Provider
       value={{ hovered: hoveredEventId, setHovered: onHoverEvent }}
     >
-      <section
-        aria-label={`${place.name} details`}
-        className={cn(
-          "flex min-h-0 flex-col overflow-hidden rounded-2xl bg-background/95 shadow-lg ring-1 shadow-black/10 ring-foreground/10 backdrop-blur-xl",
-          className
-        )}
+      <FoldContext.Provider
+        value={{ folded, toggle: () => setFolded((f) => !f) }}
       >
-        {selected ? (
-          <SpotView
-            key={selected.id}
-            event={selected}
-            areaName={place.name}
-            areaEvents={events}
-            compare={compare}
-            onBack={() => onSelectEvent(null)}
-            onSelectEvent={onSelectEvent}
-            onClose={onClose}
-          />
-        ) : (
-          <AreaView
-            place={place}
-            area={area}
-            events={events}
-            compare={compare}
-            onSelectEvent={onSelectEvent}
-            onClose={onClose}
-          />
-        )}
-      </section>
+        <section
+          aria-label={`${place.name} details`}
+          data-folded={folded}
+          className={cn(
+            "group/panel flex min-h-0 flex-col overflow-hidden rounded-2xl bg-background/95 shadow-lg ring-1 shadow-black/10 ring-foreground/10 backdrop-blur-xl",
+            className
+          )}
+        >
+          {selected ? (
+            <SpotView
+              key={selected.id}
+              event={selected}
+              areaName={place.name}
+              areaEvents={events}
+              compare={compare}
+              onBack={() => onSelectEvent(null)}
+              onSelectEvent={onSelectEvent}
+              onClose={onClose}
+            />
+          ) : (
+            <AreaView
+              place={place}
+              area={area}
+              events={events}
+              compare={compare}
+              onSelectEvent={onSelectEvent}
+              onClose={onClose}
+            />
+          )}
+        </section>
+      </FoldContext.Provider>
     </HoverContext.Provider>
   )
 }
@@ -189,6 +198,7 @@ function AreaView({
         </div>
         <WatchButton place={place} history={area.history.data} />
         <ShareButton />
+        <FoldButton />
         <Button
           variant="outline"
           size="icon-sm"
@@ -198,15 +208,22 @@ function AreaView({
           <XIcon />
         </Button>
       </header>
-      <AppPicker
-        value={compare.filter}
-        counts={counts}
-        onChange={(f) =>
-          f === "all" ? compare.onFilterChange("all") : compare.onAppChange(f)
-        }
-      />
-      <Tabs tab={tab} onChange={setTab} />
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3 wrap-break-word">
+      <div className={FOLDS}>
+        <AppPicker
+          value={compare.filter}
+          counts={counts}
+          onChange={(f) =>
+            f === "all" ? compare.onFilterChange("all") : compare.onAppChange(f)
+          }
+        />
+        <Tabs tab={tab} onChange={setTab} />
+      </div>
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3 wrap-break-word",
+          FOLDS
+        )}
+      >
         {tab === "overview" && (
           <AreaOverview
             place={place}
@@ -248,9 +265,25 @@ function AreaView({
               offshore,
               live,
               analysisLines,
+              filter: compare.filter,
+              period: compare.period,
             })}
             fileName={slug(place.name)}
-            events={events}
+            events={events.filter(
+              (e) =>
+                e.live ||
+                (inFilter(e.type, compare.filter) &&
+                  inPeriod(e.date, compare.period))
+            )}
+            scope={
+              <Choice
+                label="Period"
+                icon={<CalendarIcon />}
+                value={compare.period}
+                options={PERIODS}
+                onChange={compare.onPeriodChange}
+              />
+            }
             bbox={area.bbox}
           />
         )}
@@ -497,6 +530,7 @@ function SpotView({
           </button>
           <div className="flex gap-1.5">
             <ShareButton />
+            <FoldButton />
             <Button
               variant="outline"
               size="icon-sm"
@@ -527,8 +561,15 @@ function SpotView({
           </div>
         </div>
       </header>
-      <Tabs tab={tab} onChange={setTab} />
-      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3">
+      <div className={FOLDS}>
+        <Tabs tab={tab} onChange={setTab} />
+      </div>
+      <div
+        className={cn(
+          "min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3",
+          FOLDS
+        )}
+      >
         {tab === "overview" && (
           <>
             <SpotOverview
@@ -758,5 +799,30 @@ function Choice<T extends string>({
         ))}
       </SelectContent>
     </Select>
+  )
+}
+
+/** Hidden while the card is folded (phones only). */
+const FOLDS = "max-sm:group-data-[folded=true]/panel:hidden"
+
+const FoldContext = React.createContext<{
+  folded: boolean
+  toggle: () => void
+}>({ folded: false, toggle: () => {} })
+
+/** Phones: fold the card to its header (to see the map), or open it again. */
+function FoldButton() {
+  const { folded, toggle } = React.useContext(FoldContext)
+  return (
+    <Button
+      variant="outline"
+      size="icon-sm"
+      aria-label={folded ? "Show details" : "Hide details to see the map"}
+      aria-expanded={!folded}
+      onClick={toggle}
+      className="sm:hidden"
+    >
+      {folded ? <ChevronDownIcon /> : <ChevronUpIcon />}
+    </Button>
   )
 }

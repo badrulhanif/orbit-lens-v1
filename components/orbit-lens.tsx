@@ -2,6 +2,7 @@
 
 import * as React from "react"
 import dynamic from "next/dynamic"
+import { LayersIcon, XIcon } from "lucide-react"
 import { useTheme } from "next-themes"
 
 import type { AnalysisOverlay } from "@/components/analysis-card"
@@ -18,6 +19,7 @@ import { NearbyButton, NearbyProblem } from "@/components/nearby-card"
 import { PlaceSearch, type SearchBias } from "@/components/place-search"
 import { SarLegend } from "@/components/sar-legend"
 import { SarPassNav } from "@/components/sar-pass-nav"
+import { Button } from "@/components/ui/button"
 import { useArea } from "@/hooks/use-area"
 import { useDeviceLocation } from "@/hooks/use-device-location"
 import { WatchesProvider } from "@/hooks/use-watches"
@@ -58,6 +60,11 @@ const ALERT_NOTICES: Record<string, string> = {
   invalid: "That link has expired or was already used.",
   error: "Something went wrong with that email link. Please try again later.",
 }
+
+/** Phone-sized screen (matches Tailwind's `max-sm`). */
+const isPhone = () =>
+  typeof window !== "undefined" &&
+  window.matchMedia("(max-width: 639px)").matches
 
 // Record the visit (IP goes to the server log only) once per page load.
 let visitLogged = false
@@ -179,6 +186,8 @@ export function OrbitLens() {
   }
 
   const [dataInfo, setDataInfo] = React.useState(false)
+  // Phones: the map-layers card is folded into a button until opened.
+  const [layersOpen, setLayersOpen] = React.useState(false)
   const openDataInfo = () => setDataInfo(true)
 
   function showHazard(intent: HazardIntent) {
@@ -511,14 +520,38 @@ export function OrbitLens() {
             )}
             <div
               ref={controlsRef}
-              className="pointer-events-auto sm:absolute sm:top-4 sm:right-4 sm:z-10 sm:w-88"
+              className="pointer-events-auto flex flex-col items-end gap-2 sm:absolute sm:top-4 sm:right-4 sm:z-10 sm:block sm:w-88"
             >
-              <MapControls
-                view={view}
-                onViewChange={setView}
-                radar={nisar.layer}
-                onRadarChange={nisar.setLayer}
-              />
+              {/* Phones: the card opens from a round button, and closes once
+                  something is picked. */}
+              <div className={cn("w-full", !layersOpen && "max-sm:hidden")}>
+                <MapControls
+                  view={view}
+                  onViewChange={(v) => {
+                    setView(v)
+                    if (isPhone()) setLayersOpen(false)
+                  }}
+                  radar={nisar.layer}
+                  onRadarChange={(l) => {
+                    nisar.setLayer(l)
+                    if (isPhone()) setLayersOpen(false)
+                  }}
+                />
+              </div>
+              <Button
+                variant="outline"
+                aria-label={
+                  layersOpen ? "Close map layers" : "Map layers and radar"
+                }
+                aria-expanded={layersOpen}
+                onClick={() => setLayersOpen((o) => !o)}
+                className="relative size-11 rounded-full bg-background/90 shadow-lg backdrop-blur-xl sm:hidden"
+              >
+                {layersOpen ? <XIcon /> : <LayersIcon />}
+                {!layersOpen && nisar.layer && (
+                  <span className="absolute top-1.5 right-1.5 size-2.5 rounded-full bg-violet-600 ring-2 ring-background" />
+                )}
+              </Button>
             </div>
           </div>
 

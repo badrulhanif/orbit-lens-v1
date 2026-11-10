@@ -2,7 +2,14 @@
 
 import * as React from "react"
 
-import { newAlerts, snapshotOf, type Alert, type Snapshot } from "@/lib/alerts"
+import {
+  cleanTopics,
+  newAlerts,
+  snapshotOf,
+  type Alert,
+  type Snapshot,
+  type Topic,
+} from "@/lib/alerts"
 import { areaBoxFor, areaQuery, type AreaHistory } from "@/lib/area"
 import type { Place } from "@/lib/geo"
 import { fromSearch, toSearch } from "@/lib/share"
@@ -13,7 +20,13 @@ import { fromSearch, toSearch } from "@/lib/share"
  * can show a system notification when something new turns up.
  */
 
-type Watched = { link: string; name: string; snapshot: Snapshot | null }
+type Watched = {
+  link: string
+  name: string
+  snapshot: Snapshot | null
+  /** What to alert about (all when missing). */
+  topics?: Topic[]
+}
 export type StoredAlert = Alert & {
   link: string
   place: string
@@ -96,7 +109,7 @@ function useWatchesState() {
         continue
       }
       const now = new Date().toISOString()
-      for (const a of newAlerts(w.snapshot, history))
+      for (const a of newAlerts(w.snapshot, history, cleanTopics(w.topics)))
         found.push({ ...a, link: w.link, place: w.name, at: now, read: false })
       updated.push({ ...w, snapshot: snapshotOf(history) })
     }
@@ -149,8 +162,21 @@ function useWatchesState() {
     ])
   }
 
+  const watched = (place: Place | null) =>
+    place ? watches.find((w) => w.link === placeLink(place)) : undefined
+
   return {
     watches,
+    /** A watched place's topics (all by default). */
+    topicsOf: (place: Place) => cleanTopics(watched(place)?.topics),
+    setTopics: (place: Place, topics: Topic[]) =>
+      storeWatches(
+        watches.map((w) =>
+          w.link === placeLink(place)
+            ? { ...w, topics: cleanTopics(topics) }
+            : w
+        )
+      ),
     alerts,
     unread: alerts.filter((a) => !a.read).length,
     isWatching,

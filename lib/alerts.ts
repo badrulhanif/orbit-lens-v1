@@ -23,6 +23,34 @@ export type Alert = {
   eventId?: string
 }
 
+/** What a watcher wants to hear about (all of them by default). */
+export const TOPICS = [
+  { id: "warnings", label: "Weather warnings" },
+  { id: "centres", label: "Relief centres opening" },
+  { id: "flood", label: "Floods" },
+  { id: "landslide", label: "Landslides" },
+  { id: "earthquake", label: "Earthquakes" },
+  { id: "other", label: "Storms and other" },
+] as const
+export type Topic = (typeof TOPICS)[number]["id"]
+export const ALL_TOPICS: Topic[] = TOPICS.map((t) => t.id)
+
+/** Which topic an event belongs to. */
+const topicOf = (e: HistoryEvent): Topic =>
+  e.type === "flood" || e.type === "landslide"
+    ? e.type
+    : e.type === "earthquake" || e.type === "tsunami" || e.type === "volcano"
+      ? "earthquake"
+      : "other"
+
+/** Keep only known topics (from links or stored data). */
+export const cleanTopics = (v: unknown): Topic[] => {
+  const list = Array.isArray(v)
+    ? v.filter((t): t is Topic => ALL_TOPICS.includes(t as Topic))
+    : []
+  return list.length ? list : ALL_TOPICS
+}
+
 /** Only recent records count as news (older ones are history). */
 const RECENT_DAYS = 60
 
@@ -44,16 +72,19 @@ const evacuees = (events: HistoryEvent[]) =>
 const until = (w: Warning) =>
   w.validTo ? ` until ${formatEventDate(w.validTo.slice(0, 10))}` : ""
 
-/** New alerts since `prev` (none the first time: that's the baseline). */
+/** New alerts since `prev` (none the first time: that's the baseline),
+ * on the chosen topics. */
 export function newAlerts(
   prev: Snapshot | null,
-  history: AreaHistory
+  history: AreaHistory,
+  topics: Topic[] = ALL_TOPICS
 ): Alert[] {
   if (!prev) return []
+  const wants = new Set(topics)
   const alerts: Alert[] = []
   const seenWarnings = new Set(prev.warnings)
   for (const w of history.warnings) {
-    if (seenWarnings.has(w.id)) continue
+    if (!wants.has("warnings") || seenWarnings.has(w.id)) continue
     alerts.push({
       id: w.id,
       kind: "warning",
@@ -62,7 +93,7 @@ export function newAlerts(
     })
   }
   const live = history.events.filter((e) => e.live)
-  if (live.length > prev.centres) {
+  if (wants.has("centres") && live.length > prev.centres) {
     const people = evacuees(live)
     alerts.push({
       id: `centres-${live.length}-${new Date().toISOString().slice(0, 10)}`,
@@ -77,6 +108,7 @@ export function newAlerts(
     .slice(0, 10)
   for (const e of history.events) {
     if (e.live || seen.has(e.id) || (e.date ?? "") < cutoff) continue
+    if (!wants.has(topicOf(e))) continue
     alerts.push({
       id: e.id,
       kind: "event",

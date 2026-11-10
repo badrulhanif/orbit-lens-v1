@@ -285,7 +285,7 @@ export function PlaceSearch({
           onKeyDown={onKeyDown}
           onFocus={() => data && setOpen(true)}
           onBlur={() => setOpen(false)}
-          placeholder="Search a place, or a hazard like “flood”"
+          placeholder="Search a place or “flood”"
           autoComplete="off"
           spellCheck={false}
           enterKeyHint="search"

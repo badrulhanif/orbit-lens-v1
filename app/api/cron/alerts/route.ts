@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server"
 
-import { newAlerts, snapshotOf } from "@/lib/alerts"
+import { cleanTopics, newAlerts, snapshotOf } from "@/lib/alerts"
 import {
   appUrl,
   emailEnabled,
@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
     checked++
     const snapshot = snapshotOf(history)
     for (const w of group) {
-      const alerts = newAlerts(w.snapshot, history)
+      const alerts = newAlerts(w.snapshot, history, cleanTopics(w.place.topics))
       try {
         if (alerts.length) {
           const name = escapeHtml(w.place.name)
