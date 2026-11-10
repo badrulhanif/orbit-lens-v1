@@ -184,3 +184,95 @@ test("alerts only cover the topics picked", async () => {
   expect(kinds(["earthquake", "warnings"])).toEqual(["q", "w"])
   expect(kinds(undefined)).toEqual(["f", "q", "w"])
 })
+
+test("measurements skip a newest cycle that only clips the area", async () => {
+  const { coverGranules, latestUsable } = await import("@/lib/measure-plan")
+  const pass = (
+    id: string,
+    frame: number,
+    bbox: [number, number, number, number]
+  ) => ({
+    id,
+    layer: "signal" as const,
+    start: "2026-10-01T00:00:00Z",
+    end: "2026-10-01T00:00:00Z",
+    direction: "Ascending" as const,
+    track: 1,
+    provisional: false,
+    frame,
+    footprint: [],
+    bbox,
+  })
+  const cycle = (n: number, passes: ReturnType<typeof pass>[]) => ({
+    cycle: n,
+    direction: "Ascending" as const,
+    start: "2026-10-01T00:00:00Z",
+    end: "2026-10-01T00:00:00Z",
+    provisional: false,
+    passes,
+  })
+  const area: [number, number, number, number] = [101, 4, 103, 6]
+  const cycles = [
+    cycle(34, [pass("sliver", 9, [102.9, 3, 105, 7])]),
+    cycle(33, [pass("full-33", 4, [100, 3, 104, 7])]),
+    cycle(32, [pass("full-32", 4, [100, 3, 104, 7])]),
+  ]
+  expect(latestUsable(cycles, area)).toBe(1)
+  const { before, after } = coverGranules(cycles, area, "previous")
+  expect(after.map((p) => p.id)).toEqual(["full-33"])
+  expect(before.map((p) => p.id)).toEqual(["full-32"])
+})
+
+test("likely-why notes follow the radar evidence", async () => {
+  const { coverDrivers, movementDrivers } = await import("@/lib/drivers")
+  const day = (date: string, water: number, vegetation: number) => ({
+    date,
+    water,
+    vegetation,
+    open: 100,
+    built: 20,
+    rvi: 0.5,
+  })
+  const base = {
+    a: day("2026-11-01", 10, 500),
+    b: day("2026-11-13", 40, 470),
+    newWater: 30,
+    receded: 0,
+    vegLost: 0,
+    vegGained: 0,
+    measured: 620,
+    pol: {
+      a: { hh: -8, hv: -15 },
+      b: { hh: -9, hv: -15 },
+      vegHH: 3,
+      vegHV: 0.4,
+      openHH: 0,
+      openHV: 0,
+      vegPixels: 5000,
+      openPixels: 3000,
+    },
+  }
+  const kelantan: [number, number, number, number] = [101.5, 4.7, 102.5, 6.2]
+  const ids = coverDrivers(base, kelantan).map((d) => d.id)
+  expect(ids).toContain("flood")
+  expect(ids).toContain("under-canopy")
+  expect(coverDrivers(base, kelantan)[0].cause).toMatch(/monsoon/)
+  // Nothing changed: no notes.
+  const calm = { ...base, newWater: 0, pol: { ...base.pol, vegHH: 0.2 } }
+  expect(coverDrivers(calm, kelantan)).toEqual([])
+  // Sinking ground.
+  const sinking = movementDrivers(
+    { p5: -30, p95: 4, moving: 0.12, threshold: 10 },
+    "mm/yr",
+    kelantan
+  )
+  expect(sinking.map((d) => d.id)).toEqual(["subsidence"])
+  // Movement inside its own uncertainty isn't called sinking.
+  const noisy = movementDrivers(
+    { p5: -28, p95: 23, moving: 0.19, threshold: 20 },
+    "mm",
+    kelantan,
+    35
+  )
+  expect(noisy.map((d) => d.id)).toEqual(["unclear"])
+})

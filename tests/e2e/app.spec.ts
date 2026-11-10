@@ -135,3 +135,41 @@ test("scheduled jobs and moderation refuse callers without the secret", async ({
   const moderate = (await request.get("/api/reports/moderate")).status()
   expect([401, 501]).toContain(moderate)
 })
+
+test("findings page tells the stories and links back to the map", async ({
+  page,
+}) => {
+  const errors = watchErrors(page)
+  await page.goto("/findings")
+  await expect(
+    page.getByRole("heading", { name: /Malaysia through NISAR/ })
+  ).toBeVisible()
+  await expect(page.getByRole("heading", { level: 2 }).first()).toBeVisible()
+  const live = page.getByRole("link", { name: /live$/ }).first()
+  await expect(live).toHaveAttribute("href", /name=/)
+  const width = await page.evaluate(
+    () => document.documentElement.scrollWidth - window.innerWidth
+  )
+  expect(width).toBeLessThanOrEqual(0)
+  expect(errors).toEqual([])
+})
+
+test("radar layer has a time-lapse and a C-band comparison", async ({
+  page,
+}) => {
+  await page.goto("/?name=Kuala%20Lumpur&at=3.1478,101.6953&kind=City")
+  await page.getByRole("button", { name: /Signal quality/ }).click()
+  const nav = page.getByRole("navigation", { name: "NISAR cycles" })
+  await expect(
+    nav.getByRole("button", { name: "Play time-lapse" })
+  ).toBeVisible({
+    timeout: 30_000,
+  })
+  const cband = nav.getByRole("button", { name: "C-band" })
+  await expect(cband).toBeVisible()
+  await cband.click()
+  await expect(cband).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByText(/Sentinel-1 (C-band ·|: )/).first()).toBeVisible({
+    timeout: 30_000,
+  })
+})

@@ -250,7 +250,8 @@ export function OrbitLens() {
     overlay: analysis,
     onOverlay: showAnalysis,
   }
-  const comparing = nisar.compare !== null
+  // Swipe view: two dates (from the panel) or L-band vs C-band.
+  const comparing = nisar.compare !== null || nisar.cband
 
   // Hazard history for the picked place (the left panel).
   const area = useArea(picked)
@@ -405,8 +406,8 @@ export function OrbitLens() {
               theme={theme}
               split={split}
               onSplitChange={setSplit}
-              beforeLabel={nisar.compare?.aLabel ?? ""}
-              afterLabel={nisar.compare?.bLabel ?? ""}
+              beforeLabel={nisar.compareLabels?.before ?? ""}
+              afterLabel={nisar.compareLabels?.after ?? ""}
             />
           )}
 
@@ -491,7 +492,7 @@ export function OrbitLens() {
         bottom-right.
       */}
           <div className="pointer-events-none absolute right-14 bottom-3 left-3 z-10 flex flex-col gap-2 sm:contents">
-            {radarOn && !comparing && (
+            {radarOn && !nisar.compare && (
               <div
                 ref={passNavRef}
                 className="pointer-events-auto sm:absolute sm:bottom-4 sm:left-4 sm:z-10 sm:w-88 lg:left-1/2 lg:-translate-x-1/2"
@@ -514,7 +515,9 @@ export function OrbitLens() {
                     onClose={() => setAnalysis(null)}
                   />
                 ) : (
-                  nisar.layer && <SarLegend layer={nisar.layer} />
+                  nisar.layer && (
+                    <SarLegend layer={nisar.layer} cband={nisar.cband} />
+                  )
                 )}
               </div>
             )}

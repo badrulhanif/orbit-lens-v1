@@ -102,9 +102,10 @@ export function syncSarLayers(map: MapLibreMap, sar: SarOverlay | null) {
           type: "raster",
           tiles: [piece.tiles],
           tileSize: 256,
-          maxzoom: 13,
+          maxzoom: piece.maxzoom ?? 13,
           bounds: piece.bounds,
           attribution:
+            piece.attribution ??
             "NISAR: NASA/JPL-Caltech &amp; ISRO via NASA GIBS / ASF DAAC",
         })
       } else {

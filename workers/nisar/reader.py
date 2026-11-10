@@ -138,6 +138,9 @@ def metadata(url: str) -> dict:
                 "layers": {},
             }
             for name, p in layers.items():
+                # Some GCOV frames are single-polarization (HH only).
+                if p not in g:
+                    continue
                 d = g[p]
                 tiles = {}
                 for i in range(d.id.get_num_chunks()):
@@ -700,17 +703,49 @@ def area_mask(bbox, shape, boundary: str | None) -> np.ndarray:
     return out
 
 
+# Pixels (80 m) dropped along each swath edge: the outer ~2 km of a swath
+# sits near the radar's noise floor and reads too dark.
+SWATH_EDGE = 25
+
+
+def _erode(valid: np.ndarray, k: int) -> np.ndarray:
+    """Shrink the valid area by k pixels from its edges with no data. The
+    window's own border isn't a swath edge, so it isn't shrunk."""
+    out = valid.copy()
+    for axis in (0, 1):
+        for step in range(1, k + 1):
+            for sign in (1, -1):
+                shifted = np.roll(valid, sign * step, axis=axis)
+                edge = slice(0, step) if sign > 0 else slice(-step, None)
+                if axis == 0:
+                    shifted[edge, :] = True
+                else:
+                    shifted[:, edge] = True
+                out &= shifted
+    return out
+
+
 def _backscatter(url: str, bbox: list[float]):
-    """HH and HV power over the box (sampled patches for big areas)."""
+    """HH and HV power over the box (sampled patches for big areas). None
+    for frames without both (HH-only products can't be classified)."""
     m = metadata(url)
+    if not all(k in m["layers"] for k in ("hh", "hv")):
+        print(f"[nisar] skipping single-polarization frame {url.rsplit('/', 1)[-1]}", flush=True)
+        return None
     windows, sampled = windows_for(m, bbox)
     if not windows:
         return None
     grids: dict[str, list[np.ndarray]] = {"hh": [], "hv": []}
     for rows, cols in windows:
         d = read_window(url, m, rows, cols)
+        valid = np.ones(d["hh"].shape, bool)
         for k in grids:
-            v = np.where(np.isfinite(d[k]) & (d[k] > 0), d[k], np.nan)
+            valid &= np.isfinite(d[k]) & (d[k] > 0)
+        # Swath edges are noisy and dark (they'd read as a line of water
+        # where two swaths meet); let the neighbouring swath fill in.
+        valid = _erode(valid, SWATH_EDGE)
+        for k in grids:
+            v = np.where(valid, d[k], np.nan)
             grids[k].append(to_lonlat_grid(m, rows, cols, v, bbox))
     return {"cut": sampled, **{k: _mosaic(v) for k, v in grids.items()}}
 
@@ -798,6 +833,8 @@ def cover(a_urls: list[str], b_urls: list[str], bbox: list[float], boundary=None
     ):
         rgba[m_] = (*colour, 220)
     return {
+        "pol": _polarizations(A, B, ca, cb, both, d_hh, d_hv),
+        "images": _pol_images(A, B, both, d_hh, d_hv),
         "available": True,
         "a": summary(ca, A),
         "b": summary(cb, B),
@@ -810,6 +847,85 @@ def cover(a_urls: list[str], b_urls: list[str], bbox: list[float], boundary=None
         "frames": max(A["frames"], B["frames"]),
         "map": _png(rgba),
         "bbox": bbox,
+    }
+
+
+def _median_db(values: np.ndarray, where: np.ndarray):
+    v = values[where & np.isfinite(values)]
+    return round(float(np.median(v)), 2) if v.size >= 50 else None
+
+
+def _polarizations(A, B, ca, cb, both, d_hh, d_hv):
+    """What each polarization shows, in dB (medians over measured land).
+
+    HH (sent and received horizontally) is strongest from buildings and from
+    flooded trees, where the wave bounces off the water and back off the
+    trunks ("double bounce"). HV (received the other way) comes from the
+    jumble of branches and leaves, so it follows how much vegetation there
+    is. Water is dark in both.
+    """
+    with np.errstate(divide="ignore", invalid="ignore"):
+        db = {
+            when: {k: 10 * np.log10(d[k]) for k in ("hh", "hv")}
+            for when, d in (("a", A), ("b", B))
+        }
+    veg = both & (ca == VEGETATION) & (cb == VEGETATION)
+    open_ = both & (ca == OPEN) & (cb == OPEN)
+    return {
+        **{
+            when: {k: _median_db(v, both) for k, v in pols.items()}
+            for when, pols in db.items()
+        },
+        # Change where the cover stayed the same: flooding under the canopy
+        # (HH up, HV steady), canopy thinning (HV down), wetter soil (HH up
+        # on open land: water raises the ground's dielectric constant).
+        "vegHH": _median_db(d_hh, veg),
+        "vegHV": _median_db(d_hv, veg),
+        "openHH": _median_db(d_hh, open_),
+        "openHV": _median_db(d_hv, open_),
+        "vegPixels": int(veg.sum()),
+        "openPixels": int(open_.sum()),
+    }
+
+
+def _grey(db: np.ndarray, lo: float, hi: float) -> np.ndarray:
+    return np.nan_to_num(np.clip((db - lo) / (hi - lo), 0, 1) * 255).astype(np.uint8)
+
+
+def _pol_images(A, B, both, d_hh, d_hv):
+    """Pictures of the later date in each polarization, a colour mix, and
+    how each polarization changed (blue = brighter, red = darker)."""
+    with np.errstate(divide="ignore", invalid="ignore"):
+        hh = 10 * np.log10(B["hh"])
+        hv = 10 * np.log10(B["hv"])
+    ok = both & np.isfinite(hh) & np.isfinite(hv)
+    alpha = np.where(ok, 230, 0).astype(np.uint8)
+
+    def grey(db, lo, hi):
+        g = _grey(db, lo, hi)
+        return _png(np.dstack([g, g, g, alpha]))
+
+    # Dual-pol colour mix: red HH, green HV, blue HH/HV.
+    rgb = np.dstack(
+        [
+            _grey(hh, -20, 2),
+            _grey(hv, -26, -8),
+            _grey(hh - hv, 2, 14),
+            alpha,
+        ]
+    )
+
+    def change(d):
+        img = _colour(np.where(ok, d, np.nan), 6)
+        return _png(img)
+
+    return {
+        "hh": grey(hh, -20, 2),
+        "hv": grey(hv, -26, -8),
+        "rgb": _png(rgb),
+        # _colour: blue = positive (brighter), red = negative (darker).
+        "dhh": change(d_hh),
+        "dhv": change(d_hv),
     }
 
 

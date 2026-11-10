@@ -4,8 +4,10 @@ import * as React from "react"
 
 import type { LatLng } from "@/lib/geo"
 import {
+  formatRange,
   gibsSignalTiles,
   passDay,
+  sentinel1Tiles,
   type SarCoverageResponse,
   type SarCycle,
   type SarLayer,
@@ -282,17 +284,91 @@ export function useNisar({
     return { pieces, waiting }
   }
 
+  // L-band vs C-band: NISAR on the main map, Sentinel-1 from the nearest
+  // day on the swipe side.
+  const [cband, setCband] = React.useState(false)
+  // Comparing two dates replaces the C-band view.
+  const pickCompare = React.useCallback((next: typeof compare) => {
+    if (next) setCband(false)
+    setCompare(next)
+  }, [])
+  const cbandOn = cband && layer === "signal" && !compare && !!cycle
+  const s1Key =
+    cbandOn && coverage
+      ? `${cycle!.end.slice(0, 10)}|${coverage.bbox.join(",")}`
+      : null
+  const [s1, setS1] = React.useState<{
+    key: string
+    day: { day: string; bbox: Bbox; offset: number } | null
+    error?: boolean
+  } | null>(null)
+  React.useEffect(() => {
+    if (!s1Key) return
+    const [near, box] = s1Key.split("|")
+    const [w, s, e, n] = box.split(",")
+    const controller = new AbortController()
+    fetch(`/api/sar/sentinel1?w=${w}&s=${s}&e=${e}&n=${n}&near=${near}`, {
+      signal: controller.signal,
+    })
+      .then((res) => (res.ok ? res.json() : Promise.reject()))
+      .then((body: { days: { day: string; bbox: Bbox; offset: number }[] }) =>
+        setS1({ key: s1Key, day: body.days[0] ?? null })
+      )
+      .catch(() => {
+        if (!controller.signal.aborted)
+          setS1({ key: s1Key, day: null, error: true })
+      })
+    return () => controller.abort()
+  }, [s1Key])
+  const s1Now = s1 && s1.key === s1Key ? s1 : null
+
   const main = piecesFor(shown)
   const side = piecesFor(cycleB)
   const overlay: SarOverlay | null =
     layer && main.pieces.length
       ? { layer, pieces: main.pieces, opacity: 0.85 }
       : null
-  const compareOverlay: SarOverlay | null =
-    layer && compare && side.pieces.length
+  const compareOverlay: SarOverlay | null = cbandOn
+    ? s1Now?.day
+      ? {
+          layer: "signal",
+          pieces: [
+            {
+              id: `s1-${s1Now.day.day}`,
+              kind: "tiles",
+              tiles: sentinel1Tiles(s1Now.day.day),
+              bounds: s1Now.day.bbox,
+              maxzoom: 12,
+              attribution:
+                "Sentinel-1: ESA Copernicus, processed by NASA OPERA (JPL) via NASA GIBS",
+            },
+          ],
+          opacity: 0.85,
+        }
+      : null
+    : layer && compare && side.pieces.length
       ? { layer, pieces: side.pieces, opacity: 0.85 }
       : null
   const waiting = main.waiting + (compare ? side.waiting : 0)
+
+  /** Labels for the two sides of the swipe view. */
+  const compareLabels = cbandOn
+    ? {
+        before: `NISAR L-band · ${formatRange(cycle!.start, cycle!.end)}`,
+        after: s1Now
+          ? s1Now.day
+            ? `Sentinel-1 C-band · ${formatRange(s1Now.day.day, s1Now.day.day)}`
+            : s1Now.error
+              ? "Sentinel-1: couldn't load"
+              : "Sentinel-1: no pass within 8 days"
+          : "Sentinel-1: finding a pass…",
+      }
+    : compare
+      ? {
+          before: `Before · ${compare.aLabel}`,
+          after: `After · ${compare.bLabel}`,
+        }
+      : null
 
   return {
     layer,
@@ -309,7 +385,11 @@ export function useNisar({
     waiting,
     overlay,
     compare,
-    setCompare,
+    setCompare: pickCompare,
     compareOverlay,
+    compareLabels,
+    /** Sentinel-1 (C-band) beside NISAR (L-band); "signal" layer only. */
+    cband: cbandOn,
+    setCband,
   }
 }

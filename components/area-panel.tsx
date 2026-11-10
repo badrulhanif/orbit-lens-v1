@@ -49,7 +49,10 @@ import {
   type AppId,
   type HazardFilter,
 } from "@/lib/apps"
+import { Tip } from "@/components/tip"
+import { useJson } from "@/hooks/use-json"
 import {
+  areaQuery,
   type Bbox,
   formatEventDate,
   HAZARD_COLOR,
@@ -194,7 +197,10 @@ function AreaView({
           <h2 className="truncate text-lg leading-tight font-semibold">
             {place.name}
           </h2>
-          <p className="text-xs text-muted-foreground">{place.kind}</p>
+          <p className="flex min-w-0 items-center gap-1 text-xs text-muted-foreground">
+            <span className="shrink-0">{place.kind}</span>
+            <People bbox={area.bbox} boundaryKey={place.boundaryKey} />
+          </p>
         </div>
         <WatchButton place={place} history={area.history.data} />
         <ShareButton />
@@ -289,6 +295,32 @@ function AreaView({
         )}
       </div>
     </>
+  )
+}
+
+/** "· ~2.2 million people" (WorldPop), to put changes in context. */
+function People({
+  bbox,
+  boundaryKey,
+}: {
+  bbox: Bbox | null
+  boundaryKey?: string
+}) {
+  const res = useJson<{ people: number | null }>(
+    bbox ? `/api/population?${areaQuery(bbox, boundaryKey)}` : null
+  )
+  const n = res.data?.people
+  if (n == null || n < 1) return null
+  const text =
+    n >= 1e6
+      ? `${(n / 1e6).toFixed(1)} million`
+      : n >= 1e4
+        ? `${Math.round(n / 1e3)}k`
+        : n.toLocaleString("en-GB")
+  return (
+    <Tip label="People living in this area: WorldPop 2020 estimate (100 m grid)">
+      <span className="truncate">· ~{text} people</span>
+    </Tip>
   )
 }
 

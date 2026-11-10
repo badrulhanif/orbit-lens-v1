@@ -145,7 +145,7 @@ export function CompareMap({
 
   if (!mainMap) return null
   return (
-    <div className="pointer-events-none absolute inset-0 z-[5]">
+    <div className="pointer-events-none absolute inset-0 z-5">
       <div
         className="absolute inset-y-0 w-0.5 -translate-x-1/2 bg-orange-600 shadow-[0_0_0_1px_rgba(255,255,255,0.6)]"
         style={{ left: `${split * 100}%` }}
@@ -183,13 +183,13 @@ export function CompareMap({
         className="absolute top-[calc(50%+34px)] -translate-x-[calc(100%+10px)] rounded-full bg-foreground px-3 py-1.5 text-xs font-semibold whitespace-nowrap text-background shadow-lg"
         style={{ left: `${split * 100}%` }}
       >
-        Before · {beforeLabel}
+        {beforeLabel}
       </span>
       <span
         className="absolute top-[calc(50%+34px)] translate-x-2.5 rounded-full bg-orange-600 px-3 py-1.5 text-xs font-semibold whitespace-nowrap text-white shadow-lg"
         style={{ left: `${split * 100}%` }}
       >
-        After · {afterLabel}
+        {afterLabel}
       </span>
     </div>
   )

@@ -40,8 +40,12 @@ export const APP_ICON: Record<AppId, LucideIcon> = {
 export type AnalysisOverlay = {
   url: string
   bbox: Bbox
-  kind: "signal" | "movement" | "measured"
+  kind: "signal" | "movement" | "measured" | "polarization"
   label: string
+  /** Polarization images: what the picture shows. */
+  note?: string
+  /** Polarization change images: blue brighter, red darker. */
+  diverging?: boolean
   /** Measured maps: the colour scale runs from -range to +range (unit). */
   range?: number
   unit?: string
@@ -603,6 +607,35 @@ export function ChangeLegend({
 }) {
   if (overlay.kind === "measured")
     return <MeasuredLegend overlay={overlay} onClose={onClose} />
+  if (overlay.kind === "polarization")
+    return (
+      <section className="grid gap-2 rounded-xl bg-background/90 p-3 text-xs shadow-lg ring-1 shadow-black/10 ring-foreground/10 backdrop-blur-xl">
+        <div className="flex items-start justify-between gap-2">
+          <p className="font-medium">{overlay.label}</p>
+          <button
+            type="button"
+            onClick={onClose}
+            className="text-[11px] text-muted-foreground hover:text-foreground"
+          >
+            Hide
+          </button>
+        </div>
+        {overlay.diverging && (
+          <div className="grid gap-1">
+            <div className="h-2.5 rounded-full bg-[linear-gradient(to_right,#cd3232,#ffffff,#3232ff)] ring-1 ring-foreground/10" />
+            <div className="flex justify-between text-[11px] text-muted-foreground tabular-nums">
+              <span>−6 dB darker</span>
+              <span>+6 dB brighter</span>
+            </div>
+          </div>
+        )}
+        {overlay.note && (
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            {overlay.note}
+          </p>
+        )}
+      </section>
+    )
   const rows =
     overlay.kind === "signal"
       ? [

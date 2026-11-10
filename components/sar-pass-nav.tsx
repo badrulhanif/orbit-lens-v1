@@ -1,19 +1,28 @@
 "use client"
 
+import * as React from "react"
 import {
   ChevronLeftIcon,
   ChevronRightIcon,
   LoaderCircleIcon,
+  PauseIcon,
+  PlayIcon,
 } from "lucide-react"
 
+import { Tip } from "@/components/tip"
 import { Button } from "@/components/ui/button"
 import type { useNisar } from "@/hooks/use-nisar"
 import { formatRange } from "@/lib/sar"
 import { cn } from "@/lib/utils"
 
+/** How long each cycle stays on screen while playing (once it's drawn). */
+const FRAME_MS = 1800
+
 /**
- * Bottom-centre: step through NISAR's 12-day cycles. Each cycle is every
- * swath over the area on screen, stitched together.
+ * Bottom-centre: step through NISAR's 12-day cycles, or play them in order
+ * as a time-lapse. Each cycle is every swath over the area on screen,
+ * stitched together. On the brightness layer, "C-band" sets Sentinel-1
+ * beside NISAR.
  */
 export function SarPassNav({
   nisar,
@@ -22,8 +31,27 @@ export function SarPassNav({
   nisar: ReturnType<typeof useNisar>
   className?: string
 }) {
-  const { cycle, cycles, cycleIndex } = nisar
+  const { cycle, cycles, cycleIndex, setCycleIndex } = nisar
   const count = cycles?.length ?? 0
+  const [playing, setPlaying] = React.useState(false)
+  const ready = !nisar.loading && nisar.waiting === 0
+
+  // Time-lapse: oldest → newest, moving on once each cycle has drawn.
+  React.useEffect(() => {
+    if (!playing || !ready) return
+    const timer = setTimeout(() => {
+      if (cycleIndex > 0) setCycleIndex(cycleIndex - 1)
+      else setPlaying(false)
+    }, FRAME_MS)
+    return () => clearTimeout(timer)
+  }, [playing, ready, cycleIndex, setCycleIndex])
+
+  function togglePlay() {
+    if (playing) return setPlaying(false)
+    // From the start when already at the newest.
+    if (cycleIndex === 0) setCycleIndex(count - 1)
+    setPlaying(true)
+  }
 
   let body: React.ReactNode
   if (nisar.loading && !cycle) {
@@ -46,12 +74,27 @@ export function SarPassNav({
     const swaths = cycle.passes.length
     body = (
       <>
+        <Tip label={playing ? "Pause" : "Play every pass, oldest first"}>
+          <Button
+            variant="ghost"
+            size="icon-sm"
+            aria-label={playing ? "Pause time-lapse" : "Play time-lapse"}
+            aria-pressed={playing}
+            disabled={count < 2}
+            onClick={togglePlay}
+          >
+            {playing ? <PauseIcon /> : <PlayIcon />}
+          </Button>
+        </Tip>
         <Button
           variant="ghost"
           size="icon-sm"
           aria-label="Older cycle"
           disabled={cycleIndex >= count - 1}
-          onClick={() => nisar.setCycleIndex(cycleIndex + 1)}
+          onClick={() => {
+            setPlaying(false)
+            setCycleIndex(cycleIndex + 1)
+          }}
         >
           <ChevronLeftIcon />
         </Button>
@@ -66,11 +109,12 @@ export function SarPassNav({
             {nisar.waiting > 0
               ? `Loading ${swaths - nisar.waiting} of ${swaths} swaths…`
               : [
+                  playing && `${count - cycleIndex} of ${count}`,
                   nisar.layer === "movement"
                     ? "vs 12 days earlier"
                     : `${swaths} swath${swaths === 1 ? "" : "s"}`,
                   cycle.direction.toLowerCase(),
-                  `cycle ${cycle.cycle}`,
+                  !playing && `cycle ${cycle.cycle}`,
                   cycle.provisional && "provisional",
                 ]
                   .filter(Boolean)
@@ -82,10 +126,26 @@ export function SarPassNav({
           size="icon-sm"
           aria-label="Newer cycle"
           disabled={cycleIndex <= 0}
-          onClick={() => nisar.setCycleIndex(cycleIndex - 1)}
+          onClick={() => {
+            setPlaying(false)
+            setCycleIndex(cycleIndex - 1)
+          }}
         >
           <ChevronRightIcon />
         </Button>
+        {nisar.layer === "signal" && (
+          <Tip label="Set Sentinel-1 (C-band) beside NISAR (L-band) on a nearby date">
+            <Button
+              variant={nisar.cband ? "default" : "ghost"}
+              size="sm"
+              aria-pressed={nisar.cband}
+              className="h-7 px-2 text-[11px]"
+              onClick={() => nisar.setCband(!nisar.cband)}
+            >
+              C-band
+            </Button>
+          </Tip>
+        )}
       </>
     )
   }

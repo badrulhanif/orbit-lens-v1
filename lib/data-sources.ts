@@ -37,9 +37,32 @@ export const DATA_GROUPS: {
         name: "NASA GIBS",
         by: "NASA Earthdata",
         url: "https://nasa-gibs.github.io/gibs-api-docs/",
-        gives: "Map tiles of NISAR radar brightness",
+        gives:
+          "Map tiles of NISAR radar brightness, and of Sentinel-1 for the C-band comparison",
         coverage: "About two weeks behind the ASF archive",
         licence: "NASA open data",
+      },
+      {
+        name: "Sentinel-1 (OPERA RTC-S1)",
+        by: "ESA Copernicus; terrain-corrected by NASA JPL's OPERA project, found via NASA CMR",
+        url: "https://www.jpl.nasa.gov/go/opera/products/rtc-product/",
+        gives:
+          "C-band radar brightness (VV and VH) on the pass nearest a NISAR date, to set beside NISAR's L-band",
+        coverage: "Every few days since 2023",
+        licence: "Copernicus open data; NASA open data",
+      },
+    ],
+  },
+  {
+    title: "Context",
+    sources: [
+      {
+        name: "WorldPop",
+        by: "WorldPop, University of Southampton",
+        url: "https://www.worldpop.org/",
+        gives: "How many people live in the area on screen",
+        coverage: "2020 estimate, 100 m grid",
+        licence: "CC BY 4.0",
       },
     ],
   },
@@ -184,4 +207,5 @@ export const DATA_CAVEATS = [
   "Quick radar figures use NASA's preview images, so they're estimates. Measured values come from the full NISAR products: movement relative to the area's median, land cover from brightness thresholds calibrated over Kuala Lumpur.",
   "Yearly rates (mm/yr) need at least 6 months of passes; before that the app shows total movement over the period instead.",
   "Relief centre locations are exact; the flooded area is usually nearby.",
+  '"Likely why" notes are hypotheses from the radar alone (which polarization changed and how), not confirmed causes.',
 ]

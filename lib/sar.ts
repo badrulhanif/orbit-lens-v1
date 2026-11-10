@@ -77,6 +77,9 @@ export type SarTile =
       tiles: string
       /** Only request tiles inside here. */
       bounds: [number, number, number, number]
+      /** Deepest zoom GIBS has (NISAR 13, Sentinel-1 12). */
+      maxzoom?: number
+      attribution?: string
     }
   | {
       id: string
@@ -100,6 +103,14 @@ export type SarOverlay = {
 export function gibsSignalTiles(date: string) {
   const origin = typeof window === "undefined" ? "" : window.location.origin
   return `${origin}/api/sar/tiles/${date}/{z}/{x}/{y}`
+}
+
+/**
+ * Sentinel-1 C-band backscatter (NASA OPERA RTC-S1, false colour) for one
+ * day, straight from NASA GIBS (no proxy needed: these tiles are clean).
+ */
+export function sentinel1Tiles(date: string) {
+  return `https://gibs.earthdata.nasa.gov/wmts/epsg3857/best/OPERA_L2_Radiometric_Terrain_Corrected_SAR_Sentinel-1/default/${date}/GoogleMapsCompatible_Level12/{z}/{y}/{x}.png`
 }
 
 const DAY = new Intl.DateTimeFormat("en-GB", {

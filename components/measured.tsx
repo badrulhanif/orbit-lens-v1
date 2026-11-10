@@ -10,9 +10,11 @@ import {
 
 import type { AnalysisOverlay } from "@/components/analysis-card"
 import { Loading } from "@/components/area/ui"
+import { Drivers } from "@/components/drivers"
 import { Button } from "@/components/ui/button"
 import { useJson } from "@/hooks/use-json"
 import { areaQuery, formatEventDate, type Bbox } from "@/lib/area"
+import { movementDrivers } from "@/lib/drivers"
 import { granuleIds, measureBox, movementGranules } from "@/lib/measure-plan"
 import type { SarCycle } from "@/lib/sar"
 
@@ -110,7 +112,7 @@ export function Measured({
     onAvailable?.(ok)
   }, [ok, onAvailable])
 
-  const lines = reportLines(pair.data, trend.data)
+  const lines = reportLines(pair.data, trend.data, bbox)
   const linesKey = lines.join("\n")
   React.useEffect(() => {
     onLines?.(lines)
@@ -234,7 +236,12 @@ export function Measured({
             )}
           </div>
           {wantTrend && (
-            <TrendResult trend={trend} overlay={overlay} showMap={showMap} />
+            <TrendResult
+              trend={trend}
+              bbox={bbox}
+              overlay={overlay}
+              showMap={showMap}
+            />
           )}
           {p.coherence! < 0.5 && (
             <p className="rounded-md bg-amber-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-amber-900 dark:text-amber-200">
@@ -256,10 +263,12 @@ export function Measured({
 
 function TrendResult({
   trend,
+  bbox,
   overlay,
   showMap,
 }: {
   trend: { data: Trend | null; loading: boolean }
+  bbox: Bbox
   overlay: AnalysisOverlay | null
   showMap: (
     map: string | undefined,
@@ -311,6 +320,7 @@ function TrendResult({
           )}
         </div>
       )}
+      {s && <Drivers drivers={movementDrivers(s, unit, bbox, t.uncertainty)} />}
       <p className="text-[11px] text-muted-foreground">
         Terrain-linked weather delay removed from each pair; ground that
         doesn&apos;t move steadily across the pairs is left out.
@@ -360,7 +370,7 @@ export function Figure({
   )
 }
 
-function reportLines(p: Pair | null, t: Trend | null) {
+function reportLines(p: Pair | null, t: Trend | null, bbox: Bbox) {
   if (!p?.available) return []
   const lines = [
     `Measured from the full NISAR product (${formatEventDate(p.from!)} to ${formatEventDate(p.to!)}): coherence ${pct(p.coherence!)} (${pct(p.reliable!)} of pixels reliable).`,
@@ -372,7 +382,10 @@ function reportLines(p: Pair | null, t: Trend | null) {
   const s = t?.available ? (t.rate ?? t.total) : null
   if (t?.available && s)
     lines.push(
-      `${t.rate ? "Yearly rate" : "Total movement"} from ${t.pairs} pairs (${formatEventDate(t.from!)} to ${formatEventDate(t.to!)}): ${mm(s.p5)} to ${mm(s.p95)} ${t.rate ? "mm/yr" : "mm"}; ${pct(s.moving)} beyond ${s.threshold}.`
+      `${t.rate ? "Yearly rate" : "Total movement"} from ${t.pairs} pairs (${formatEventDate(t.from!)} to ${formatEventDate(t.to!)}): ${mm(s.p5)} to ${mm(s.p95)} ${t.rate ? "mm/yr" : "mm"}; ${pct(s.moving)} beyond ${s.threshold}.`,
+      ...movementDrivers(s, t.rate ? "mm/yr" : "mm", bbox, t.uncertainty).map(
+        (d) => `Likely why (hypothesis): ${d.cause} ${d.evidence}`
+      )
     )
   return lines
 }

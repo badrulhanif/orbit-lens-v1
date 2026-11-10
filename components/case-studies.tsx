@@ -1,7 +1,8 @@
 "use client"
 
 import * as React from "react"
-import { ChevronRightIcon, LoaderCircleIcon } from "lucide-react"
+import Link from "next/link"
+import { BookOpenIcon, ChevronRightIcon, LoaderCircleIcon } from "lucide-react"
 
 import { APP_ICON } from "@/components/analysis-card"
 import { CASE_STUDIES, type AppId } from "@/lib/apps"
@@ -96,6 +97,14 @@ export function CaseStudies({
           </button>
         )
       })}
+      <Link
+        href="/findings"
+        className="flex items-center gap-1.5 rounded-lg px-2 py-1.5 text-xs font-medium text-orange-700 hover:bg-muted dark:text-orange-400"
+      >
+        <BookOpenIcon className="size-3.5" />
+        Read what we found
+        <ChevronRightIcon className="ml-auto size-4" />
+      </Link>
     </section>
   )
 }

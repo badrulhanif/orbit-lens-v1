@@ -5,11 +5,14 @@ import { DownloadIcon, LayersIcon, RulerIcon } from "lucide-react"
 
 import type { AnalysisOverlay } from "@/components/analysis-card"
 import { Loading } from "@/components/area/ui"
+import { Drivers } from "@/components/drivers"
 import { Figure, pct } from "@/components/measured"
+import { Polarizations, type PolImages } from "@/components/polarizations"
 import { Button } from "@/components/ui/button"
 import { useJson } from "@/hooks/use-json"
 import type { AppId } from "@/lib/apps"
 import { areaQuery, formatEventDate, type Bbox } from "@/lib/area"
+import { coverDrivers, type CoverResult, type PolStats } from "@/lib/drivers"
 import { coverGranules, granuleIds, measureBox } from "@/lib/measure-plan"
 import type { SarCycle } from "@/lib/sar"
 
@@ -43,6 +46,9 @@ type Cover = {
   frames?: number
   map?: string
   bbox?: Bbox
+  /** Per-polarization stats and pictures (newer measurement service). */
+  pol?: PolStats
+  images?: PolImages
 }
 
 const km2 = (v: number) =>
@@ -82,7 +88,8 @@ export function MeasuredCover({
   React.useEffect(() => {
     onAvailable?.(ok)
   }, [ok, onAvailable])
-  const lines = ok ? reportLines(c!) : []
+  const drivers = ok ? coverDrivers(c as CoverResult, bbox) : []
+  const lines = ok ? reportLines(c!, drivers) : []
   const linesKey = lines.join("\n")
   React.useEffect(() => {
     onLines?.(lines)
@@ -191,6 +198,17 @@ export function MeasuredCover({
               </Button>
             )}
           </div>
+          <Drivers drivers={drivers} />
+          {c.images && c.bbox && (
+            <Polarizations
+              images={c.images}
+              pol={c.pol}
+              dates={{ a: c.a!.date, b: c.b!.date }}
+              bbox={c.bbox}
+              overlay={overlay}
+              onOverlay={onOverlay}
+            />
+          )}
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             Classes from L-band brightness (HH and HV), checked on NISAR over
             KL, forest, peat swamp, mangrove and paddy; land only, inside the
@@ -216,11 +234,17 @@ function shares(d: CoverDate) {
     .join(" · ")
 }
 
-function reportLines(c: Cover) {
+function reportLines(c: Cover, drivers: ReturnType<typeof coverDrivers>) {
   const a = c.a!
   const b = c.b!
   return [
     `Measured land cover from the full NISAR product, ${formatEventDate(b.date)}: ${shares(b)} (${km2(c.measured!)} of land).`,
     `Since ${formatEventDate(a.date)}: new water ${km2(c.newWater!)}, water receded ${km2(c.receded!)}, vegetation lost ${km2(c.vegLost!)}, gained ${km2(c.vegGained!)}; vegetation index ${a.rvi.toFixed(2)} → ${b.rvi.toFixed(2)}.`,
+    ...(c.pol?.a.hh != null && c.pol.b.hh != null
+      ? [
+          `Polarizations (median over land): HH ${c.pol.a.hh} → ${c.pol.b.hh} dB, HV ${c.pol.a.hv} → ${c.pol.b.hv} dB.`,
+        ]
+      : []),
+    ...drivers.map((d) => `Likely why (hypothesis): ${d.cause} ${d.evidence}`),
   ]
 }

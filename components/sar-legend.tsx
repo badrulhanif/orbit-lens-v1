@@ -22,9 +22,12 @@ const INFO: Record<SarLayer, { title: string; about: string; more: string }> = {
 /** Bottom-right key for the radar layer, with an expandable explanation. */
 export function SarLegend({
   layer,
+  cband = false,
   className,
 }: {
   layer: SarLayer
+  /** Sentinel-1 is on the swipe side. */
+  cband?: boolean
   className?: string
 }) {
   const [open, setOpen] = React.useState(false)
@@ -72,6 +75,28 @@ export function SarLegend({
             Rivers, sea and flood water look dark
           </Swatch>
         </ul>
+      )}
+
+      {cband && (
+        <div className="grid gap-1.5 border-t pt-2">
+          <p className="font-medium">Right side: Sentinel-1 (C-band)</p>
+          <ul className="grid gap-1.5 text-xs">
+            <Swatch color="#d58ad5" label="Pink">
+              Buildings and bare ground
+            </Swatch>
+            <Swatch color="#9fae9a" label="Grey-green">
+              Leafy canopy
+            </Swatch>
+            <Swatch color="#050505" label="Black">
+              Water
+            </Swatch>
+          </ul>
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            C-band (5.6 cm) bounces off leaves; NISAR&apos;s L-band (24 cm)
+            passes through to branches and the ground, so it tells forest from
+            plantation better and sees flooding under trees.
+          </p>
+        </div>
       )}
 
       <button
