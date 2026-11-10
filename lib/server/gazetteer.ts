@@ -333,3 +333,16 @@ export async function adminAreasAt(latitude: number, longitude: number) {
         (b.bbox[2] - b.bbox[0]) * (b.bbox[3] - b.bbox[1])
     )
 }
+
+/** Malaysia's states and federal territories, as search returns them. */
+export async function malaysianStates() {
+  const entries = await load()
+  return entries
+    .map((e) => e.row)
+    .filter((r) => r[3] === "state" && r[4].endsWith("Malaysia") && r[6])
+    .map((r) => ({
+      name: r[0],
+      bbox: r[6]!,
+      boundaryKey: `state|${r[0]}|${r[4]}`,
+    }))
+}

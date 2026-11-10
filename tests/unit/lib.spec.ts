@@ -108,3 +108,34 @@ test("shareable links round-trip the view", () => {
   expect(fromSearch("?name=x&at=999,1")).toBeNull()
   expect(fromSearch("?f=flood")).toBeNull()
 })
+
+test("alerts: nothing the first time, then only what's new", async () => {
+  const { newAlerts, snapshotOf } = await import("@/lib/alerts")
+  const recent = new Date().toISOString().slice(0, 10)
+  const base = {
+    bbox: [0, 0, 1, 1] as [number, number, number, number],
+    searched: [0, 0, 1, 1] as [number, number, number, number],
+    sources: [],
+    warnings: [],
+    events: [event({ id: "old", date: "2001-01-01" })],
+  }
+  expect(newAlerts(null, base)).toEqual([])
+  const snap = snapshotOf(base)
+  const later = {
+    ...base,
+    warnings: [
+      {
+        id: "w1",
+        title: "Thunderstorms",
+        issued: "",
+        validFrom: null,
+        validTo: null,
+        text: "Selangor",
+      },
+    ],
+    events: [...base.events, event({ id: "new", date: recent })],
+  }
+  const alerts = newAlerts(snap, later)
+  expect(alerts.map((a) => a.kind).sort()).toEqual(["event", "warning"])
+  expect(newAlerts(snapshotOf(later), later)).toEqual([])
+})

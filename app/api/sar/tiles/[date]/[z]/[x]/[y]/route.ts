@@ -1,7 +1,6 @@
 import type { NextRequest } from "next/server"
-import sharp from "sharp"
 
-import { TtlCache } from "@/lib/server/util"
+import { loadSharp, TtlCache } from "@/lib/server/util"
 
 /**
  * NISAR backscatter map tiles from NASA GIBS, through our server:
@@ -51,6 +50,7 @@ async function download(date: string, z: number, x: number, y: number) {
  * Checked in 32×32 patches; one bad patch flags the tile.
  */
 async function looksCorrupt(png: Buffer) {
+  const sharp = await loadSharp()
   if (png.length < 1000) return false // the genuine blank tile
   const { data, info } = await sharp(png)
     .ensureAlpha()
@@ -101,6 +101,7 @@ async function looksCorrupt(png: Buffer) {
 
 /** The matching quarter of the parent tile, scaled up. */
 async function fromParent(date: string, z: number, x: number, y: number) {
+  const sharp = await loadSharp()
   if (z <= 1) return null
   const parent = await tile(date, z - 1, x >> 1, y >> 1, true)
   if (!parent || parent.length < 1000) return parent

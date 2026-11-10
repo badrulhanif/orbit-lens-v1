@@ -7,6 +7,7 @@ import {
 import { EONET_CATEGORIES, eonetRecords, refine } from "@/lib/server/eonet"
 import { isOffshore } from "@/lib/server/land"
 import { reliefCentres, warningsFor } from "@/lib/server/local-reports"
+import { communityEvents } from "@/lib/server/reports"
 import { majorFloodsFor } from "@/lib/server/major-floods"
 import { normaliseRegion, regionMatcher } from "@/lib/server/regions"
 import { fetchJson, TtlCache, validLatLng } from "@/lib/server/util"
@@ -409,6 +410,11 @@ export async function areaHistory(
       : !event.scope && inBox(event, bbox)
     if (here) out.push(event)
   }
+
+  // Public reports approved by a moderator, inside the area.
+  const community = await communityEvents(searched).catch(() => [])
+  for (const e of community)
+    if (rings ? inRings(e, rings) : inBox(e, bbox)) out.push(e)
 
   out.push(...stateRecords(boundaryKey, bbox))
   await addSummaries(out)

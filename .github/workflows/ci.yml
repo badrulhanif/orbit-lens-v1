@@ -1,0 +1,55 @@
+# Checks every push and pull request. Vercel deploys separately; to make it
+# wait for these checks, turn on Deployment Checks in the Vercel project.
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  app:
+    name: Lint, types, unit tests, build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run lint
+      - run: npm run typecheck
+      - run: npm run test:unit
+      - run: npm run build
+
+  e2e:
+    name: Browser tests (live data)
+    needs: app
+    runs-on: ubuntu-latest
+    # Uses live public data sources, which can be briefly down: report, don't block.
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+      - run: npm ci
+      - run: npm run build
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+
+  worker:
+    name: NISAR service (Python)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: workers/nisar/requirements.txt
+      - run: pip install -r workers/nisar/requirements.txt
+      - name: Imports and syntax
+        working-directory: workers/nisar
+        run: python -c "import reader, server; print('ok')"

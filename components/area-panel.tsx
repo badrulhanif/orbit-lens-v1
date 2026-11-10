@@ -10,11 +10,7 @@ import {
   XIcon,
 } from "lucide-react"
 
-import {
-  AnalysisCard,
-  analysisBox,
-  AppPicker,
-} from "@/components/analysis-card"
+import { AnalysisCard, AppPicker } from "@/components/analysis-card"
 import { Compare, type CompareControls } from "@/components/area/compare"
 import {
   EventSection,
@@ -28,7 +24,10 @@ import {
 } from "@/components/area/events"
 import { HappeningNow } from "@/components/area/live"
 import { ShareButton } from "@/components/share-button"
+import { useFeatures, WatchButton } from "@/components/alerts-bell"
+import { ReportButton } from "@/components/report-dialog"
 import { measuredPairUrl } from "@/components/measured"
+import { analysisBox } from "@/lib/measure-plan"
 import { Report, slug } from "@/components/area/report"
 import { areaReport, spotReport } from "@/components/area/report-doc"
 import { Field, Loading, Stat, type Tab, Tabs } from "@/components/area/ui"
@@ -188,6 +187,7 @@ function AreaView({
           </h2>
           <p className="text-xs text-muted-foreground">{place.kind}</p>
         </div>
+        <WatchButton place={place} history={area.history.data} />
         <ShareButton />
         <Button
           variant="outline"
@@ -284,6 +284,7 @@ function AreaOverview({
 }) {
   const { history, radar } = area
   const [sort, setSort] = React.useState<SortKey>("newest")
+  const features = useFeatures()
   const cycles = radar.data?.movement?.cycles.length ?? 0
   // Stats, list and map all follow the hazard filter.
   const pass = (e: HistoryEvent) =>
@@ -402,6 +403,7 @@ function AreaOverview({
         </>
       )}
 
+      {features.reports && <ReportButton place={place} />}
       <SourcesNote sources={area.history.data?.sources} />
     </div>
   )

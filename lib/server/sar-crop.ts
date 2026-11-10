@@ -1,8 +1,6 @@
-import sharp from "sharp"
-
 import type { Bbox } from "@/lib/area"
 import { loadScene } from "@/lib/server/nisar"
-import { parseBbox, TtlCache } from "@/lib/server/util"
+import { loadSharp, parseBbox, TtlCache } from "@/lib/server/util"
 
 /**
  * Cut NISAR images down to one area, for side-by-side date comparison.
@@ -30,6 +28,7 @@ const cached = (key: string, make: () => Promise<Buffer>) =>
 /** A GUNW browse image cut to the area (transparent where it has no data). */
 export function cropMovement(granule: string, bbox: Bbox) {
   return cached(`m|${granule}|${bbox.join(",")}`, async () => {
+    const sharp = await loadSharp()
     const { png, scene } = await loadScene(granule)
     const [[L, T], , [R, B]] = scene.coordinates
     const meta = await sharp(png).metadata()
@@ -94,6 +93,7 @@ export function cropMovement(granule: string, bbox: Bbox) {
  */
 export function cropMovementNative(granule: string, bbox: Bbox) {
   return cached(`mn|${granule}|${bbox.join(",")}`, async () => {
+    const sharp = await loadSharp()
     const { png, scene } = await loadScene(granule)
     const [[L, T], , [R, B]] = scene.coordinates
     const meta = await sharp(png).metadata()
@@ -176,6 +176,7 @@ export function cropSignal(
  * Dark = low brightness in NASA's false-colour backscatter render.
  */
 export async function darkSurfaceChange(a: Buffer, b: Buffer) {
+  const sharp = await loadSharp()
   const [ra, rb] = await Promise.all(
     [a, b].map((img) =>
       sharp(img).ensureAlpha().raw().toBuffer({ resolveWithObject: true })

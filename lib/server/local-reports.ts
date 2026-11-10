@@ -154,7 +154,7 @@ export async function warningsFor(boundaryKey: string): Promise<Warning[]> {
   const now = new Date(Date.now() + 8 * 3600_000).toISOString().slice(0, 19)
   const list = await allWarnings()
   const seen = new Set<string>()
-  return list.flatMap((w, i): Warning[] => {
+  return list.flatMap((w): Warning[] => {
     if (!w.valid_to || w.valid_to.replace(" ", "T") < now) return []
     const sections = w.text_en
       .split(/(?=SECTION [A-Z]:)|(?=\b\d\)\s)/)
@@ -167,7 +167,8 @@ export async function warningsFor(boundaryKey: string): Promise<Warning[]> {
     seen.add(text)
     return [
       {
-        id: `met-${i}-${w.warning_issue.issued}`,
+        // Stable across checks, so alerts don't repeat a warning.
+        id: `met-${w.warning_issue.issued}-${w.warning_issue.title_en.toLowerCase().replace(/[^a-z]+/g, "-")}`,
         title: w.warning_issue.title_en,
         issued: w.warning_issue.issued,
         validFrom: w.valid_from,

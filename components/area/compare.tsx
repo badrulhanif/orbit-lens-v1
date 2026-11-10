@@ -3,7 +3,7 @@
 import * as React from "react"
 import { LayersIcon } from "lucide-react"
 
-import { analysisBox, type AnalysisOverlay } from "@/components/analysis-card"
+import type { AnalysisOverlay } from "@/components/analysis-card"
 import { Loading, Stat } from "@/components/area/ui"
 import { Button } from "@/components/ui/button"
 import {
@@ -19,6 +19,7 @@ import { areaQuery, type Bbox, type Period } from "@/lib/area"
 import { passDay, type SarLayer } from "@/lib/sar"
 import { type PassOption, passOptions } from "@/lib/sar-options"
 import { cn } from "@/lib/utils"
+import { analysisBox } from "@/lib/measure-plan"
 
 type Option = PassOption
 

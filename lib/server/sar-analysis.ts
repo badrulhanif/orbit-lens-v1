@@ -1,10 +1,8 @@
-import sharp from "sharp"
-
 import type { Bbox } from "@/lib/area"
 import { rasterMask, type Rings } from "@/lib/server/boundaries"
 import { landRingsIn } from "@/lib/server/land"
 import { cropMovementNative, cropSignal } from "@/lib/server/sar-crop"
-import { TtlCache } from "@/lib/server/util"
+import { loadSharp, TtlCache } from "@/lib/server/util"
 
 /**
  * Pixels to count: inside the area's outline (when given) and on land.
@@ -99,6 +97,7 @@ function areaKm2([w, s, e, n]: Bbox) {
 }
 
 async function raw(png: Buffer) {
+  const sharp = await loadSharp()
   const { data, info } = await sharp(png)
     .ensureAlpha()
     .raw()
@@ -138,6 +137,7 @@ async function signalChange(
   bbox: Bbox,
   rings: Rings | null = null
 ): Promise<{ stats: SignalChange; map: Buffer }> {
+  const sharp = await loadSharp()
   const [A, B] = await Promise.all([
     cropSignal(dateA, bbox).then(raw),
     cropSignal(dateB, bbox).then(raw),
@@ -333,6 +333,7 @@ async function movementChange(
   bbox: Bbox,
   rings: Rings | null = null
 ): Promise<{ stats: CoherenceChange; map: Buffer }> {
+  const sharp = await loadSharp()
   const [A, B] = await Promise.all([
     cropMovementNative(granuleA, bbox).then(raw),
     cropMovementNative(granuleB, bbox).then(raw),

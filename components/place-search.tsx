@@ -291,7 +291,7 @@ export function PlaceSearch({
           enterKeyHint="search"
           className={cn(
             "h-10 w-full min-w-0 bg-transparent pl-9 text-base outline-none placeholder:text-muted-foreground md:text-sm",
-            actions ? "pr-20" : "pr-10"
+            actions ? "pr-28" : "pr-10"
           )}
         />
         <div className="absolute right-1.5 flex items-center gap-0.5">

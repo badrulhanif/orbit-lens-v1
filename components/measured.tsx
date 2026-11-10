@@ -13,7 +13,8 @@ import { Loading } from "@/components/area/ui"
 import { Button } from "@/components/ui/button"
 import { useJson } from "@/hooks/use-json"
 import { areaQuery, formatEventDate, type Bbox } from "@/lib/area"
-import type { SarCycle, SarPass } from "@/lib/sar"
+import { granuleIds, measureBox, movementGranules } from "@/lib/measure-plan"
+import type { SarCycle } from "@/lib/sar"
 
 /**
  * Measured ground movement from the full NISAR products (via the Python
@@ -65,45 +66,11 @@ type Trend = {
 export const pct = (v: number) => `${Math.round(v * 100)}%`
 const mm = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`
 
-/** At most 3° a side, around the area's centre (what the service reads). */
-export function measureBox([w, s, e, n]: Bbox): Bbox {
-  const cx = (w + e) / 2
-  const cy = (s + n) / 2
-  const hx = Math.min(1.5, (e - w) / 2)
-  const hy = Math.min(1.5, (n - s) / 2)
-  return [cx - hx, cy - hy, cx + hx, cy + hy]
-}
-
-export const overlaps = (p: SarPass, [w, s, e, n]: Bbox) =>
-  p.bbox[0] < e && p.bbox[2] > w && p.bbox[1] < n && p.bbox[3] > s
-export const frameOf = (p: SarPass) => `${p.track}-${p.direction}-${p.frame}`
-
-/**
- * Which products to read: every frame of the latest cycle over the area
- * (big states span several), and the same frames in up to 8 cycles for
- * the trend.
- */
-function granules(cycles: SarCycle[], bbox: Bbox) {
-  const box = measureBox(bbox)
-  const latest = (cycles[0]?.passes ?? [])
-    .filter((p) => overlaps(p, box))
-    .slice(0, 4)
-  const frames = new Set(latest.map(frameOf))
-  const trend = cycles
-    .slice(0, 8)
-    .flatMap((c) => c.passes.filter((p) => frames.has(frameOf(p))))
-    .slice(0, 32)
-  return { latest, trend }
-}
-
-const ids = (passes: SarPass[]) =>
-  passes.map((p) => encodeURIComponent(p.id)).join(",")
-
 /** The request for the latest pair (also used to fetch it ahead of time). */
 export function measuredPairUrl(cycles: SarCycle[], bbox: Bbox) {
-  const { latest } = granules(cycles, bbox)
+  const { latest } = movementGranules(cycles, bbox)
   return latest.length
-    ? `/api/analysis/measured?kind=pair&granules=${ids(latest)}&${areaQuery(measureBox(bbox))}`
+    ? `/api/analysis/measured?kind=pair&granules=${granuleIds(latest)}&${areaQuery(measureBox(bbox))}`
     : null
 }
 
@@ -127,14 +94,14 @@ export function Measured({
 }) {
   const box = measureBox(bbox)
   const where = areaQuery(box)
-  const { latest, trend: stack } = granules(cycles, bbox)
+  const { latest, trend: stack } = movementGranules(cycles, bbox)
   const pairs = new Set(stack.map((p) => p.cycle)).size
 
   const pair = useJson<Pair>(measuredPairUrl(cycles, bbox))
   const [wantTrend, setWantTrend] = React.useState(false)
   const trend = useJson<Trend>(
     wantTrend && pairs > 1
-      ? `/api/analysis/measured?kind=trend&granules=${ids(stack)}&${where}`
+      ? `/api/analysis/measured?kind=trend&granules=${granuleIds(stack)}&${where}`
       : null
   )
 
@@ -196,7 +163,7 @@ export function Measured({
           <p className="text-[11px] text-muted-foreground">
             {formatEventDate(p.from!)} → {formatEventDate(p.to!)} · 12-day pair
             {(p.frames ?? 1) > 1 && ` · ${p.frames} radar frames`}
-            {p.cut && " · central 80 km of each frame"}
+            {p.cut && " · sampled across the area"}
           </p>
           <div className="grid grid-cols-3 gap-2">
             <Figure
@@ -268,6 +235,13 @@ export function Measured({
           </div>
           {wantTrend && (
             <TrendResult trend={trend} overlay={overlay} showMap={showMap} />
+          )}
+          {p.coherence! < 0.5 && (
+            <p className="rounded-md bg-amber-500/10 px-2 py-1.5 text-[11px] leading-relaxed text-amber-900 dark:text-amber-200">
+              Low coherence (forest or mountains): one 12-day pair here is
+              mostly weather delay, often a few cm. The trend averages it out;
+              rely on that instead.
+            </p>
           )}
           <p className="text-[11px] leading-relaxed text-muted-foreground">
             Movement toward (+) or away from (−) the satellite, relative to the

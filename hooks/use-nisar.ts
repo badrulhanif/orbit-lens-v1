@@ -110,8 +110,9 @@ export function useNisar({
           `/api/sar/coverage?layer=${next}&w=${w}&s=${s}&e=${e}&n=${n}`,
           { signal: controller.signal }
         )
-        const body = await res.json()
-        if (!res.ok)
+        // Error pages may not be JSON (or may be empty).
+        const body = await res.json().catch(() => null)
+        if (!res.ok || !body)
           throw new Error(body?.error ?? "Couldn't reach NISAR data.")
         const data = body as SarCoverageResponse
         const i = cycleIndexFor(

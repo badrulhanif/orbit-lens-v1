@@ -67,7 +67,7 @@ test("a shared link reopens the same view", async ({ page }) => {
     "/?name=Selangor&at=3.35,101.5&area=Malaysia&kind=State&bbox=100.8,2.55,102,3.95&b=state%7CSelangor%7CMalaysia&f=flood&t=5y"
   )
   await expect(
-    panel(page).getByRole("heading", { name: "Selangor" })
+    panel(page).getByRole("heading", { name: "Selangor", exact: true })
   ).toBeVisible()
   await expect(page.getByRole("radio", { name: /^Flood/ })).toHaveAttribute(
     "aria-checked",
@@ -106,4 +106,29 @@ test("the area panel never scrolls sideways", async ({ page }) => {
     )
     expect(wide, tab).toBe(0)
   }
+})
+
+test("watching a place lists it under the alerts bell", async ({ page }) => {
+  await page.goto("/")
+  await open(page, "Kuala Lumpur")
+  await expect(panel(page).locator("p.text-2xl").first()).not.toHaveText("…")
+  await panel(page)
+    .getByRole("button", { name: /^Watch Kuala Lumpur/ })
+    .click()
+  await page.getByRole("button", { name: /^Alerts/ }).click()
+  await expect(page.getByText("Watching")).toBeVisible()
+  await expect(
+    page.getByRole("button", { name: "Kuala Lumpur", exact: true })
+  ).toBeVisible()
+})
+
+test("scheduled jobs and moderation refuse callers without the secret", async ({
+  request,
+}) => {
+  expect((await request.get("/api/cron/prewarm")).status()).toBe(401)
+  expect((await request.get("/api/cron/alerts")).status()).toBe(401)
+  const status = await (await request.get("/api/alerts/status")).json()
+  expect(typeof status.email).toBe("boolean")
+  const moderate = (await request.get("/api/reports/moderate")).status()
+  expect([401, 501]).toContain(moderate)
 })

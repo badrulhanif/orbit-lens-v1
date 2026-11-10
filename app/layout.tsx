@@ -29,6 +29,7 @@ export default function RootLayout({
       lang="en"
       suppressHydrationWarning
       className={cn(
+        "light",
         "antialiased",
         fontMono.variable,
         "font-sans",
@@ -36,7 +37,11 @@ export default function RootLayout({
       )}
     >
       <body>
-        <ThemeProvider>
+        <ThemeProvider
+          attribute="class"
+          defaultTheme="light"
+          forcedTheme="light"
+        >
           <TooltipProvider delay={300}>{children}</TooltipProvider>
         </ThemeProvider>
       </body>

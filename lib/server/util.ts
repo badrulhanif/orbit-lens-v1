@@ -1,5 +1,7 @@
 /** Shared server helpers: caching, fetching and limited concurrency. */
 
+import type SharpFn from "sharp"
+
 import type { Bbox } from "@/lib/area"
 
 const USER_AGENT = "OrbitLens/0.1 (location demo)"
@@ -101,3 +103,15 @@ export function parseBbox(params: URLSearchParams): Bbox | null {
   if (!box.every(Number.isFinite) || w >= e || s >= n) return null
   return box.map((v) => Math.round(v * 1e4) / 1e4) as Bbox
 }
+
+type Sharp = typeof SharpFn
+let sharpLib: Promise<Sharp> | null = null
+
+/**
+ * sharp (a native image library), loaded on first use: routes that never
+ * touch images then work even where it can't load.
+ */
+export const loadSharp = () =>
+  (sharpLib ??= import("sharp").then(
+    (m) => ((m as { default?: Sharp }).default ?? m) as Sharp
+  ))

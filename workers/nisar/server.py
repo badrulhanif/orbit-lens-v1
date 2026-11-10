@@ -79,8 +79,8 @@ def cached(key: str, make):
 
 def parse_bbox(text: str) -> list[float]:
     w, s, e, n = (float(v) for v in text.split(","))
-    if not (-180 <= w < e <= 180 and -90 <= s < n <= 90) or e - w > 3 or n - s > 3:
-        raise ValueError("bbox must be w,s,e,n and at most 3° a side")
+    if not (-180 <= w < e <= 180 and -90 <= s < n <= 90) or e - w > 6 or n - s > 6:
+        raise ValueError("bbox must be w,s,e,n and at most 6° a side")
     return [round(v, 4) for v in (w, s, e, n)]
 
 
@@ -106,15 +106,15 @@ class Handler(BaseHTTPRequestHandler):
                 reader.check_url(u)
                 for u in (q.get("urls") or q.get("url") or "").split(",")
                 if u
-            ][:32]
+            ][:40]
             if url.path == "/measure":
                 if not urls:
                     raise ValueError("Need a product URL")
                 key = f"m|{','.join(sorted(urls))}|{bbox}"
                 body = cached(key, lambda: reader.measure(urls, bbox))
             elif url.path == "/cover":
-                a = [reader.check_url(u) for u in q.get("a", "").split(",") if u][:6]
-                b = [reader.check_url(u) for u in q.get("b", "").split(",") if u][:6]
+                a = [reader.check_url(u) for u in q.get("a", "").split(",") if u][:8]
+                b = [reader.check_url(u) for u in q.get("b", "").split(",") if u][:8]
                 if not a or not b:
                     raise ValueError("Need products for both dates")
                 boundary = q.get("boundary") or None

@@ -106,6 +106,20 @@ export const DATA_GROUPS: {
     ],
   },
   {
+    title: "Community",
+    note: "Shown only after a moderator checks them.",
+    sources: [
+      {
+        name: "Public reports",
+        by: "People using Orbit Lens",
+        url: "https://supabase.com/",
+        gives:
+          "Hazards seen on the ground (flooding, landslides, sinkholes), with optional photos",
+        coverage: 'Unverified on the ground; labelled "Public report"',
+      },
+    ],
+  },
+  {
     title: "Places and boundaries",
     sources: [
       {

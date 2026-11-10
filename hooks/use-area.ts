@@ -13,7 +13,8 @@ const idle = { data: null, loading: false, error: null }
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T> {
   const res = await fetch(url, { signal })
   const body = await res.json().catch(() => null)
-  if (!res.ok) throw new Error(body?.error ?? "Request failed.")
+  if (!res.ok || body === null)
+    throw new Error(body?.error ?? "Couldn't load this right now.")
   return body as T
 }
 

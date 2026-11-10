@@ -45,7 +45,14 @@ export type HistoryEvent = LatLng & {
   detail: string | null
   /** What happened, in a sentence or three (impacts, felt reports…). */
   description?: string | null
-  source: "Wikipedia" | "Wikidata" | "USGS" | "GDACS" | "NASA EONET" | "JKM"
+  source:
+    | "Wikipedia"
+    | "Wikidata"
+    | "USGS"
+    | "GDACS"
+    | "NASA EONET"
+    | "JKM"
+    | "Community"
   url: string | null
   /** At sea (inside state waters but more than ~3 km from land). */
   offshore?: boolean
@@ -152,6 +159,14 @@ export function precisionOf(e: HistoryEvent): {
       label: "Reported here",
       tone: "fair",
       hint: "The source lists impacts in this area; its map point is elsewhere",
+    }
+  if (e.source === "Community")
+    return {
+      label: "Public report",
+      tone: "rough",
+      hint: e.approximate
+        ? "Reported by a member of the public for this area; checked by a moderator, not verified on the ground"
+        : "Reported by a member of the public at this spot; checked by a moderator, not verified on the ground",
     }
   if (e.source === "JKM")
     return {

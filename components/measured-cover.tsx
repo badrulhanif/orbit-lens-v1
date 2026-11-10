@@ -5,18 +5,13 @@ import { DownloadIcon, LayersIcon, RulerIcon } from "lucide-react"
 
 import type { AnalysisOverlay } from "@/components/analysis-card"
 import { Loading } from "@/components/area/ui"
-import {
-  Figure,
-  frameOf,
-  measureBox,
-  overlaps,
-  pct,
-} from "@/components/measured"
+import { Figure, pct } from "@/components/measured"
 import { Button } from "@/components/ui/button"
 import { useJson } from "@/hooks/use-json"
 import type { AppId } from "@/lib/apps"
 import { areaQuery, formatEventDate, type Bbox } from "@/lib/area"
-import type { SarCycle, SarPass } from "@/lib/sar"
+import { coverGranules, granuleIds, measureBox } from "@/lib/measure-plan"
+import type { SarCycle } from "@/lib/sar"
 
 /**
  * Measured land cover from the full NISAR backscatter product (GCOV, via
@@ -53,27 +48,6 @@ type Cover = {
 const km2 = (v: number) =>
   `${v >= 100 ? Math.round(v).toLocaleString("en-GB") : v.toFixed(1)} km²`
 
-/** Latest cycle's frames over the area, and the same frames on the baseline. */
-function dates(
-  cycles: SarCycle[],
-  bbox: Bbox,
-  baseline: "previous" | "earliest"
-) {
-  const box = measureBox(bbox)
-  const after = (cycles[0]?.passes ?? [])
-    .filter((p) => overlaps(p, box))
-    .slice(0, 4)
-  const frames = new Set(after.map(frameOf))
-  const earlier = cycles
-    .slice(1)
-    .map((c) => c.passes.filter((p) => frames.has(frameOf(p))))
-    .filter((ps) => ps.length)
-  const before = (baseline === "earliest" ? earlier.at(-1) : earlier[0]) ?? []
-  return { before, after }
-}
-
-const ids = (ps: SarPass[]) => ps.map((p) => encodeURIComponent(p.id)).join(",")
-
 export function MeasuredCover({
   app,
   baseline,
@@ -96,10 +70,10 @@ export function MeasuredCover({
   onAvailable?: (ok: boolean) => void
   onLines?: (lines: string[]) => void
 }) {
-  const { before, after } = dates(cycles, bbox, baseline)
+  const { before, after } = coverGranules(cycles, bbox, baseline)
   const url =
     before.length && after.length
-      ? `/api/analysis/measured?kind=cover&a=${ids(before)}&b=${ids(after)}&${areaQuery(measureBox(bbox), boundaryKey)}`
+      ? `/api/analysis/measured?kind=cover&a=${granuleIds(before)}&b=${granuleIds(after)}&${areaQuery(measureBox(bbox), boundaryKey)}`
       : null
   const res = useJson<Cover>(url)
   const c = res.data
@@ -166,7 +140,7 @@ export function MeasuredCover({
             {formatEventDate(c.a!.date)} → {formatEventDate(c.b!.date)} ·{" "}
             {km2(c.measured!)} of land measured
             {(c.frames ?? 1) > 1 && ` · ${c.frames} frames`}
-            {c.cut && " · central 80 km of each frame"}
+            {c.cut && " · sampled across the area"}
           </p>
           <div className="grid grid-cols-3 gap-2">
             {figures.map(([label, value, sub]) => (
@@ -218,8 +192,11 @@ export function MeasuredCover({
             )}
           </div>
           <p className="text-[11px] leading-relaxed text-muted-foreground">
-            Classes from L-band brightness (HH and HV), calibrated on NISAR over
-            Kuala Lumpur; land only, inside the area&apos;s outline.
+            Classes from L-band brightness (HH and HV), checked on NISAR over
+            KL, forest, peat swamp, mangrove and paddy; land only, inside the
+            area&apos;s outline.
+            {app === "flood" &&
+              " Rice fields flooded for planting (Kedah, Perlis, Sekinchan) also show as new water."}
           </p>
         </>
       )}

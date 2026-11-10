@@ -1,8 +1,6 @@
-import sharp from "sharp"
-
 import { boxCentre } from "@/lib/area"
 import { gibsHasDay } from "@/lib/server/gibs"
-import { fetchJson, TtlCache } from "@/lib/server/util"
+import { fetchJson, loadSharp, TtlCache } from "@/lib/server/util"
 
 import type { SarCycle, SarLayer, SarPass, SarScene } from "@/lib/sar"
 
@@ -265,6 +263,7 @@ async function buildScene(granule: string): Promise<LoadedScene> {
 const BORDER = [47, 19, 55]
 
 async function clearBorder(png: Buffer) {
+  const sharp = await loadSharp()
   const { data, info } = await sharp(png)
     .ensureAlpha()
     .raw()
@@ -335,6 +334,7 @@ async function cornersFromFootprint(
   png: Buffer,
   [west, south, east, north]: [number, number, number, number]
 ) {
+  const sharp = await loadSharp()
   const { data, info } = await sharp(png)
     .ensureAlpha()
     .raw()
@@ -378,6 +378,7 @@ function corners(w: number, s: number, e: number, n: number) {
 
 /** The browse image, optionally downsized (zoomed-out views don't need 1400 px). */
 export async function sceneImage(granule: string, size: "small" | "full") {
+  const sharp = await loadSharp()
   const loaded = await loadScene(granule)
   if (size === "full") return loaded.png
   loaded.small ??= sharp(loaded.png)
@@ -385,4 +386,32 @@ export async function sceneImage(granule: string, size: "small" | "full") {
     .png({ compressionLevel: 9, palette: true })
     .toBuffer()
   return loaded.small
+}
+
+/** Largest area searched at once (degrees); bigger views use the middle. */
+const MAX_SPAN = 6
+
+/** Coverage for an area as the page asks for it (see /api/sar/coverage). */
+export async function coverageForArea(
+  layer: SarLayer,
+  [w, s, e, n]: [number, number, number, number]
+) {
+  const centre = { latitude: (s + n) / 2, longitude: (w + e) / 2 }
+  // Zoomed far out: search the middle of the view rather than half the
+  // planet (that would be thousands of swaths).
+  if (e - w > MAX_SPAN) {
+    w = centre.longitude - MAX_SPAN / 2
+    e = centre.longitude + MAX_SPAN / 2
+  }
+  if (n - s > MAX_SPAN) {
+    s = centre.latitude - MAX_SPAN / 2
+    n = centre.latitude + MAX_SPAN / 2
+  }
+  const bbox = [
+    Math.max(w, -180),
+    Math.max(s, -85),
+    Math.min(e, 180),
+    Math.min(n, 85),
+  ].map((v) => Math.round(v * 100) / 100) as [number, number, number, number]
+  return { layer, bbox, cycles: await findCoverage(layer, bbox, centre) }
 }

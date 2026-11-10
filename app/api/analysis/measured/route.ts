@@ -35,25 +35,25 @@ export async function GET(request: NextRequest) {
   }
   const params = request.nextUrl.searchParams
   const box = parseBbox(params)
-  if (!box || box[2] - box[0] > 3 || box[3] - box[1] > 3) {
+  if (!box || box[2] - box[0] > 6 || box[3] - box[1] > 6) {
     return Response.json({ error: "Invalid area." }, { status: 400 })
   }
   const kind = params.get("kind")
   try {
     let body: unknown
     if (kind === "cover") {
-      const a = list(params.get("a"), "GCOV", 6)
-      const b = list(params.get("b"), "GCOV", 6)
+      const a = list(params.get("a"), "GCOV", 8)
+      const b = list(params.get("b"), "GCOV", 8)
       if (!a.length || !b.length) throw new RangeError()
       const boundary = params.get("boundary")?.slice(0, 200) ?? null
       body = await measureCover(a, b, box, boundary)
     } else {
-      const granules = list(params.get("granules"), "GUNW", 32)
+      const granules = list(params.get("granules"), "GUNW", 40)
       if (!granules.length) throw new RangeError()
       body =
         kind === "trend"
           ? await measureTrend(granules, box)
-          : await measurePair(granules.slice(0, 4), box)
+          : await measurePair(granules.slice(0, 8), box)
     }
     return Response.json(body, {
       headers: { "Cache-Control": "private, max-age=3600" },

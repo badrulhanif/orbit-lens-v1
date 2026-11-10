@@ -1,0 +1,30 @@
+# Monthly: refresh the GDACS flood snapshot (data/gdacs.json) and open a pull
+# request with the changes. Needs "Allow GitHub Actions to create and approve
+# pull requests" (Settings → Actions → General).
+name: Refresh data
+
+on:
+  schedule:
+    - cron: "0 1 1 * *" # 1st of each month, 09:00 Malaysia time
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  gdacs:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm run data:gdacs
+      - uses: peter-evans/create-pull-request@v7
+        with:
+          branch: data/gdacs-refresh
+          commit-message: "data: refresh GDACS flood snapshot"
+          title: "Monthly data refresh: GDACS floods"
+          body: "Automatic refresh of data/gdacs.json (`npm run data:gdacs`). Merge to publish the new flood records."
+          add-paths: data/gdacs.json

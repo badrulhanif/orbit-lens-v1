@@ -16,6 +16,7 @@ import { Loading } from "@/components/area/ui"
 import { Button } from "@/components/ui/button"
 import type { useArea } from "@/hooks/use-area"
 import { Measured } from "@/components/measured"
+import { analysisBox } from "@/lib/measure-plan"
 import { MeasuredCover } from "@/components/measured-cover"
 import { useJson } from "@/hooks/use-json"
 import { appById, APPS, type AppId, type HazardFilter } from "@/lib/apps"
@@ -70,15 +71,6 @@ type CoherenceChange = {
 type Series = {
   items: string[]
   values: (Record<string, number> | null)[]
-}
-
-/** Keep areas within what the radar image service accepts (6° a side). */
-export function analysisBox([w, s, e, n]: Bbox): Bbox {
-  const cx = (w + e) / 2
-  const cy = (s + n) / 2
-  const hx = Math.min(2.95, (e - w) / 2)
-  const hy = Math.min(2.95, (n - s) / 2)
-  return [cx - hx, cy - hy, cx + hx, cy + hy]
 }
 
 /**

@@ -41,11 +41,13 @@ export function CaseStudies({
       const res = await fetch(
         `/api/search?q=${encodeURIComponent(name)}&submit=1`
       )
-      const data = (await res.json()) as SearchResponse
+      const data = (await res.json().catch(() => null)) as SearchResponse | null
       const place =
-        data.places.find((p) => p.kind === "State" && p.name === name) ??
-        data.places[0]
+        data?.places.find((p) => p.kind === "State" && p.name === name) ??
+        data?.places[0]
       if (place) onOpen(place, app)
+    } catch {
+      // Search unreachable: nothing to open.
     } finally {
       setBusy(null)
     }

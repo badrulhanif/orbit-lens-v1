@@ -59,7 +59,8 @@ PRODUCTS = {
 
 def product(url: str) -> str:
     return "GCOV" if "_GCOV_" in url else "GUNW"
-# Largest window read per frame (pixels a side, ~80 m each: about 80 km).
+# Read whole when the area in a frame is at most this (pixels, ~80 m each:
+# about 80 km a side); bigger areas are sampled in patches.
 MAX_WINDOW = 1024
 # Pixels below this coherence are too noisy to measure.
 RELIABLE = 0.4
@@ -246,20 +247,44 @@ def window_for(m: dict, bbox: list[float]):
     rows = (np.asarray(y) - m["y0"]) / m["dy"]
     r0, r1 = int(np.floor(rows.min())), int(np.ceil(rows.max()))
     c0, c1 = int(np.floor(cols.min())), int(np.ceil(cols.max()))
-    # The part of the box this frame covers, then capped around its centre.
+    # The part of the box this frame covers.
     H, W = m["shape"]
     r0, r1 = max(0, r0), min(H, r1)
     c0, c1 = max(0, c0), min(W, c1)
-    cut = False
-    if r1 - r0 > MAX_WINDOW or c1 - c0 > MAX_WINDOW:
-        cut = True
-        rc, cc = (r0 + r1) // 2, (c0 + c1) // 2
-        half = MAX_WINDOW // 2
-        r0, r1 = max(r0, rc - half), min(r1, rc + half)
-        c0, c1 = max(c0, cc - half), min(c1, cc + half)
     if r1 - r0 < 4 or c1 - c0 < 4:
         return None
-    return (r0, r1), (c0, c1), cut
+    return (r0, r1), (c0, c1)
+
+
+# Big areas: up to this many tile-sized patches (~40 km) per frame.
+PATCHES = 3
+
+
+def windows_for(m: dict, bbox: list[float]):
+    """What to read from one frame: the whole part over the box when it's
+    small enough, else evenly spread single-tile patches across it (a
+    representative sample of a big state). Returns (windows, sampled)."""
+    win = window_for(m, bbox)
+    if not win:
+        return [], False
+    (r0, r1), (c0, c1) = win
+    if r1 - r0 <= MAX_WINDOW and c1 - c0 <= MAX_WINDOW:
+        return [win], False
+    ch, cw = next(iter(m["layers"].values()))["chunk"]
+
+    def spread(a, b, size):
+        first, last = a // size, (b - 1) // size
+        picks = np.unique(np.linspace(first, last, min(PATCHES, last - first + 1)).round())
+        return [(int(k) * size, int(k) * size + size) for k in picks]
+
+    out = []
+    for ra, rb in spread(r0, r1, ch):
+        for ca, cb in spread(c0, c1, cw):
+            rs, re_ = max(ra, r0), min(rb, r1)
+            cs, ce = max(ca, c0), min(cb, c1)
+            if re_ - rs >= 4 and ce - cs >= 4:
+                out.append(((rs, re_), (cs, ce)))
+    return out, True
 
 
 def to_lonlat_grid(m, rows, cols, values, bbox, size=400):
@@ -294,13 +319,28 @@ def pair_dates(url: str):
 
 
 def movement_mm(url: str, bbox: list[float]):
-    """Line-of-sight movement (mm, toward the satellite positive) on a lon/lat
-    grid over bbox, plus coherence; None where unreliable."""
+    """Line-of-sight movement (mm, toward the satellite positive) on the
+    output lon/lat grid, plus coherence; NaN where unreliable. Big areas are
+    read as sampled patches, each referenced on its own."""
     m = metadata(url)
-    win = window_for(m, bbox)
-    if not win:
-        return None
-    rows, cols, cut = win
+    windows, sampled = windows_for(m, bbox)
+    parts = [p for p in (_window_mm(url, m, rows, cols) for rows, cols in windows) if p]
+    if not parts:
+        return {"cut": sampled, "coverage": 0.0} if windows else None
+    n = np.array([p["n"] for p in parts], float)
+    grid = _mosaic([to_lonlat_grid(m, p["rows"], p["cols"], p["mm"], bbox) for p in parts])
+    return {
+        "cut": sampled,
+        "coverage": float(np.average([p["coverage"] for p in parts], weights=n)),
+        "coherence": float(np.average([p["coherence"] for p in parts], weights=n)),
+        "reliable": float(np.average([p["reliable"] for p in parts], weights=n)),
+        "grid": grid,
+        "frequency": m["frequency"],
+    }
+
+
+def _window_mm(url, m, rows, cols):
+    """Movement over one window (see movement_mm)."""
     d = read_window(url, m, rows, cols)
     phase, coh, cc, iono = d["phase"], d["coherence"], d["components"], d["iono"]
     # Connected components: 0 = not unwrapped, 65535 = no data.
@@ -308,28 +348,32 @@ def movement_mm(url: str, bbox: list[float]):
         np.isfinite(phase) & (cc > 0) & (cc != 65535) & np.isfinite(coh) & (coh > 0)
     )
     if valid.sum() < 50:
-        return {"cut": cut, "coverage": 0.0}
+        return None
     corr = phase - np.where(np.isfinite(iono), iono, 0)
     # Phase is only relative within one connected region: use the biggest.
     main = np.bincount(cc[valid].astype(np.int64)).argmax()
     good = valid & (cc == main) & (coh >= RELIABLE)
+    # Too few reliable pixels (e.g. rainforest, where 12-day pairs lose
+    # coherence): report its coherence, but no movement figures.
     if good.sum() < 50:
-        good = valid & (cc == main)
+        good = np.zeros_like(valid)
     lam = 299_792_458.0 / m["frequency"]
     # Take out the broad tilt across the area (atmosphere and orbit errors
     # show up as a gentle ramp), then measure relative to the median.
     corr = corr - _ramp(corr, good)
     # Phase increase = range increase, so minus means toward the satellite
     # (ISCE convention).
-    mm = -(corr - np.median(corr[good])) * lam / (4 * math.pi) * 1000
+    ref = np.median(corr[good]) if good.any() else 0.0
+    mm = -(corr - ref) * lam / (4 * math.pi) * 1000
     mm = np.where(good, mm, np.nan).astype(np.float32)
     return {
-        "cut": cut,
+        "n": int(valid.sum()),
         "coverage": float(valid.mean()),
         "coherence": float(np.nanmean(np.where(valid, coh, np.nan))),
         "reliable": float(good.sum() / max(1, valid.sum())),
         "mm": mm,
-        "grid": (m, rows, cols),
+        "rows": rows,
+        "cols": cols,
     }
 
 
@@ -449,15 +493,13 @@ def frame_key(url: str) -> str:
 def _pair_grid(url: str, bbox: list[float]):
     """One frame of one pair on the output grid, corrected and re-referenced."""
     res = movement_mm(url, bbox)
-    if not res or "mm" not in res:
+    if not res or "grid" not in res:
         return None
-    m, rows, cols = res["grid"]
-    g = to_lonlat_grid(m, rows, cols, res["mm"], bbox)
-    g = tropo_correct(g, dem_grid(bbox, g.shape))
+    g = tropo_correct(res["grid"], dem_grid(bbox, res["grid"].shape))
     if np.isfinite(g).sum() < 50:
         return None
     g -= np.nanmedian(g)
-    return {**res, "grid": g, "lam": 299_792_458.0 / m["frequency"]}
+    return {**res, "grid": g, "lam": 299_792_458.0 / res["frequency"]}
 
 
 def _mosaic(grids: list[np.ndarray]) -> np.ndarray:
@@ -583,7 +625,11 @@ def rate(urls: list[str], bbox: list[float]):
 #
 # L-band gamma0 thresholds (dB), from the radar literature:
 #   water       HH < -15 and HV < -20   smooth surfaces reflect the pulse away
-#   built       HH > -3 (or > -4.5 with HV > -9)  walls and ground bounce it back
+#   built       HH > -3 with HV > -14 (or HH > -4.5 with HV > -9)
+#                                      walls and ground bounce it back
+# Checked on NISAR samples: KL (built), Ulu Gombak, North Selangor and
+# Maludam peat swamp (97-98% vegetation), Matang and Kuala Selangor mangroves,
+# Kedah and Sekinchan paddy.
 #   vegetation  HV > -16                canopies scatter in all directions
 #   open land   the rest                bare soil, short crops, grass
 
@@ -655,17 +701,18 @@ def area_mask(bbox, shape, boundary: str | None) -> np.ndarray:
 
 
 def _backscatter(url: str, bbox: list[float]):
+    """HH and HV power over the box (sampled patches for big areas)."""
     m = metadata(url)
-    win = window_for(m, bbox)
-    if not win:
+    windows, sampled = windows_for(m, bbox)
+    if not windows:
         return None
-    rows, cols, cut = win
-    d = read_window(url, m, rows, cols)
-    out = {"cut": cut}
-    for k in ("hh", "hv"):
-        v = np.where(np.isfinite(d[k]) & (d[k] > 0), d[k], np.nan)
-        out[k] = to_lonlat_grid(m, rows, cols, v, bbox)
-    return out
+    grids: dict[str, list[np.ndarray]] = {"hh": [], "hv": []}
+    for rows, cols in windows:
+        d = read_window(url, m, rows, cols)
+        for k in grids:
+            v = np.where(np.isfinite(d[k]) & (d[k] > 0), d[k], np.nan)
+            grids[k].append(to_lonlat_grid(m, rows, cols, v, bbox))
+    return {"cut": sampled, **{k: _mosaic(v) for k, v in grids.items()}}
 
 
 def _date_of(url: str):
@@ -683,7 +730,9 @@ def _classes(hh: np.ndarray, hv: np.ndarray) -> np.ndarray:
     c[ok & (v > -16)] = VEGETATION
     # Calibrated on NISAR over KL: built-up HH median 0 dB (90% > -3.8),
     # forest -5 dB, oil palm -6 dB.
-    c[ok & ((h > -3) | ((h > -4.5) & (v > -9)))] = BUILT
+    # Young rice standing in water also bounces HH brightly but stays dim in
+    # HV (-15 dB in Kedah), so built-up needs bright HV too.
+    c[ok & (((h > -3) & (v > -14)) | ((h > -4.5) & (v > -9)))] = BUILT
     # Wind roughens open water a little (sea HH median -13 dB over KL's coast).
     c[ok & (h < -15) & (v < -20)] = WATER
     return c
