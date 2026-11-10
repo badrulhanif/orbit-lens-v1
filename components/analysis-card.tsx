@@ -15,7 +15,10 @@ import {
 import { Loading } from "@/components/area/ui"
 import { Button } from "@/components/ui/button"
 import type { useArea } from "@/hooks/use-area"
-import { appById, APPS, type AppId } from "@/lib/apps"
+import { Measured } from "@/components/measured"
+import { MeasuredCover } from "@/components/measured-cover"
+import { useJson } from "@/hooks/use-json"
+import { appById, APPS, type AppId, type HazardFilter } from "@/lib/apps"
 import { areaQuery, type Bbox, type HistoryEvent } from "@/lib/area"
 import { formatRange, passDay } from "@/lib/sar"
 import { passOptions, type PassOption } from "@/lib/sar-options"
@@ -36,8 +39,11 @@ export const APP_ICON: Record<AppId, LucideIcon> = {
 export type AnalysisOverlay = {
   url: string
   bbox: Bbox
-  kind: "signal" | "movement"
+  kind: "signal" | "movement" | "measured"
   label: string
+  /** Measured maps: the colour scale runs from -range to +range (unit). */
+  range?: number
+  unit?: string
 }
 
 type SignalChange = {
@@ -75,56 +81,39 @@ export function analysisBox([w, s, e, n]: Bbox): Bbox {
   return [cx - hx, cy - hy, cx + hx, cy + hy]
 }
 
-function useJson<T>(url: string | null) {
-  const [state, setState] = React.useState<{
-    url: string
-    data: T | null
-    error: boolean
-  } | null>(null)
-  React.useEffect(() => {
-    if (!url) return
-    const controller = new AbortController()
-    fetch(url, { signal: controller.signal })
-      .then((r) => (r.ok ? (r.json() as Promise<T>) : Promise.reject()))
-      .then((data) => setState({ url, data, error: false }))
-      .catch(() => {
-        if (!controller.signal.aborted)
-          setState({ url, data: null, error: true })
-      })
-    return () => controller.abort()
-  }, [url])
-  const current = url && state?.url === url ? state : null
-  return {
-    data: current?.data ?? null,
-    loading: !!url && !current,
-    error: current?.error ?? false,
-  }
-}
-
-/** Application picker: one chip per use case. */
+/**
+ * The hazard filter: All, or one application (which also picks the
+ * analysis and radar layer). Counts are recorded events per chip.
+ */
 export function AppPicker({
   value,
+  counts,
   onChange,
 }: {
-  value: AppId
-  onChange: (id: AppId) => void
+  value: HazardFilter
+  counts: Record<HazardFilter, number> | null
+  onChange: (id: HazardFilter) => void
 }) {
+  const chips = [
+    { id: "all" as const, label: "All", Icon: LayersIcon },
+    ...APPS.map((a) => ({ id: a.id, label: a.label, Icon: APP_ICON[a.id] })),
+  ]
   return (
     <div
       role="radiogroup"
-      aria-label="Application"
+      aria-label="Hazard filter"
       className="flex flex-wrap gap-1.5 px-3 pb-2"
     >
-      {APPS.map((a) => {
-        const Icon = APP_ICON[a.id]
-        const on = value === a.id
+      {chips.map(({ id, label, Icon }) => {
+        const on = value === id
+        const n = counts?.[id]
         return (
           <button
-            key={a.id}
+            key={id}
             type="button"
             role="radio"
             aria-checked={on}
-            onClick={() => onChange(a.id)}
+            onClick={() => onChange(id)}
             className={cn(
               "flex shrink-0 items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs font-medium transition-colors",
               on
@@ -133,7 +122,17 @@ export function AppPicker({
             )}
           >
             <Icon className="size-3.5" />
-            {a.label}
+            {label}
+            {n !== undefined && (
+              <span
+                className={cn(
+                  "tabular-nums",
+                  on ? "text-white/80" : "text-muted-foreground/70"
+                )}
+              >
+                {n}
+              </span>
+            )}
           </button>
         )
       })}
@@ -200,13 +199,19 @@ export function AnalysisCard({
       : null
 
   const change = useJson<SignalChange & CoherenceChange>(changeUrl)
+  // Measured values from the full products, when the service is set up.
+  const [measured, setMeasured] = React.useState(false)
   const series = useJson<Series>(seriesUrl)
   const showing = !!overlay && overlay.url === mapUrl
 
   const related = events.filter((e) => def.hazards.includes(e.type))
   const quakes = events.filter((e) => e.type === "earthquake")
 
-  const lines = summaryLines(app, change.data, base, latest, related, quakes)
+  const [measuredLines, setMeasuredLines] = React.useState<string[]>([])
+  const lines = [
+    ...summaryLines(app, change.data, base, latest, related, quakes),
+    ...measuredLines,
+  ]
   const linesKey = lines.join("\n")
   React.useEffect(() => {
     onSummary?.(lines)
@@ -263,12 +268,42 @@ export function AnalysisCard({
         </p>
       )}
 
+      {layer === "movement" && bbox && (
+        <Measured
+          cycles={coverage?.cycles ?? []}
+          bbox={bbox}
+          overlay={overlay}
+          onOverlay={onOverlay}
+          onAvailable={setMeasured}
+          onLines={setMeasuredLines}
+        />
+      )}
+
+      {layer === "signal" && bbox && (
+        <MeasuredCover
+          app={app}
+          baseline={def.baseline}
+          cycles={coverage?.cycles ?? []}
+          bbox={bbox}
+          boundaryKey={boundaryKey}
+          overlay={overlay}
+          onOverlay={onOverlay}
+          onAvailable={setMeasured}
+          onLines={setMeasuredLines}
+        />
+      )}
+      {layer === "signal" && measured && (
+        <p className="text-[11px] text-muted-foreground">
+          Quick estimates from NASA&apos;s preview images below; use the
+          measured values above.
+        </p>
+      )}
+
       {layer === "movement" && (
         <p className="rounded-lg bg-amber-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-amber-900 dark:text-amber-200">
-          Low confidence: coherence is judged from NASA&apos;s smoothed preview
-          interferograms, which look coherent over almost all land. These
-          figures reliably separate water from land, but not stable from
-          disturbed ground. Real coherence needs the GUNW coherence layer.
+          {measured
+            ? "The figures below are quick estimates from NASA's preview images; use the measured values above."
+            : "Low confidence: coherence is judged from NASA's smoothed preview interferograms, which look coherent over almost all land. These figures reliably separate water from land, but not stable from disturbed ground."}
         </p>
       )}
 
@@ -555,7 +590,7 @@ function Shell({
           <Icon className="size-4" />
         </span>
         <div className="min-w-0">
-          <p className="text-sm font-semibold">{def.label} monitoring</p>
+          <p className="text-sm font-semibold">{def.label} · radar overview</p>
           <p className="truncate text-[11px] text-muted-foreground">
             {def.output}
           </p>
@@ -574,6 +609,8 @@ export function ChangeLegend({
   overlay: AnalysisOverlay
   onClose: () => void
 }) {
+  if (overlay.kind === "measured")
+    return <MeasuredLegend overlay={overlay} onClose={onClose} />
   const rows =
     overlay.kind === "signal"
       ? [
@@ -620,6 +657,50 @@ export function ChangeLegend({
           </li>
         ))}
       </ul>
+    </section>
+  )
+}
+
+/** Colour scale for measured movement maps. */
+function MeasuredLegend({
+  overlay,
+  onClose,
+}: {
+  overlay: AnalysisOverlay
+  onClose: () => void
+}) {
+  const r = overlay.range ?? 20
+  return (
+    <section className="grid gap-2 rounded-xl bg-background/90 p-3 text-xs shadow-lg ring-1 shadow-black/10 ring-foreground/10 backdrop-blur-xl">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-medium">Measured movement</p>
+          <p className="text-[11px] text-muted-foreground">{overlay.label}</p>
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="text-[11px] text-muted-foreground hover:text-foreground"
+        >
+          Hide
+        </button>
+      </div>
+      <div
+        className="h-2.5 rounded-full ring-1 ring-foreground/10"
+        style={{
+          background: "linear-gradient(90deg, #ff3f32, #ffffff, #323fff)",
+        }}
+      />
+      <div className="flex justify-between text-[11px] text-muted-foreground tabular-nums">
+        <span>
+          −{r} {overlay.unit} away (sinking)
+        </span>
+        <span>+{r} toward (rising)</span>
+      </div>
+      <p className="text-[11px] text-muted-foreground">
+        Along the radar&apos;s line of sight, relative to the area&apos;s
+        median. Clear = not measurable (water, dense forest).
+      </p>
     </section>
   )
 }

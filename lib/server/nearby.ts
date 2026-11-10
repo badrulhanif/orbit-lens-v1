@@ -1,6 +1,10 @@
 import type { Bbox } from "@/lib/area"
 import type { Place } from "@/lib/geo"
-import { inRings, loadBoundaries, type Rings } from "@/lib/server/boundaries"
+import {
+  boundariesAt,
+  loadBoundaries,
+  type Rings,
+} from "@/lib/server/boundaries"
 import { adminAreasAt, nearestTown } from "@/lib/server/gazetteer"
 
 /**
@@ -64,14 +68,11 @@ export async function nearbyArea(
     )
   }
 
-  const containing = (kind: "district" | "state") =>
-    Object.entries(boundaries).find(
-      ([key, rings]) =>
-        key.startsWith(`${kind}|`) &&
-        key.endsWith("Malaysia") &&
-        rings &&
-        inRings(p, rings)
-    )
+  const holding = (await boundariesAt(p)).filter((k) => k.endsWith("Malaysia"))
+  const containing = (kind: "district" | "state") => {
+    const key = holding.find((k) => k.startsWith(`${kind}|`))
+    return key ? ([key, boundaries[key]!] as const) : undefined
+  }
 
   // 1. A city territory.
   const state = containing("state")

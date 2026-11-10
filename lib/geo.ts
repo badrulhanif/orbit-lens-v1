@@ -77,6 +77,31 @@ export type HazardIntent = {
 export type SearchResponse = {
   intent: HazardIntent | null
   places: Place[]
+  /** Local stage: how many leading places are strong name matches. */
+  strong?: number
+}
+
+/**
+ * Search results in order: strong name matches, then specific spots
+ * (buildings, streets), then loose matches; no near-duplicates, at most 8.
+ */
+export function mergePlaces(
+  strong: Place[],
+  spots: Place[],
+  weak: Place[],
+  max = 8
+) {
+  const merged: Place[] = []
+  for (const p of [...strong, ...spots, ...weak]) {
+    const dupe = merged.some(
+      (m) =>
+        m.name.toLowerCase() === p.name.toLowerCase() &&
+        distanceMeters(m, p) < 2_000
+    )
+    if (!dupe) merged.push(p)
+    if (merged.length >= max) break
+  }
+  return merged
 }
 
 const EARTH_RADIUS_M = 6_371_000

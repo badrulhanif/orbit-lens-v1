@@ -1,7 +1,6 @@
 "use client"
 
-import * as React from "react"
-import { ExternalLinkIcon, InfoIcon } from "lucide-react"
+import { ExternalLinkIcon } from "lucide-react"
 
 import {
   Dialog,
@@ -11,39 +10,6 @@ import {
   DialogTitle,
 } from "@/components/ui/dialog"
 import { DATA_CAVEATS, DATA_GROUPS } from "@/lib/data-sources"
-import { cn } from "@/lib/utils"
-
-/** Opens the "About the data" dialog from anywhere on the page. */
-export const DataInfoContext = React.createContext<() => void>(() => {})
-
-/** Small "About the data" trigger. */
-export function DataInfoButton({
-  label = "About the data",
-  iconOnly,
-  className,
-}: {
-  label?: string
-  iconOnly?: boolean
-  className?: string
-}) {
-  const open = React.useContext(DataInfoContext)
-  return (
-    <button
-      type="button"
-      onClick={open}
-      aria-label={label}
-      title={label}
-      className={cn(
-        "inline-flex items-center gap-1 rounded-md text-muted-foreground transition-colors hover:text-foreground focus-visible:ring-2 focus-visible:ring-ring/50 focus-visible:outline-none",
-        iconOnly ? "size-6 justify-center" : "text-[11px] font-medium",
-        className
-      )}
-    >
-      <InfoIcon className={iconOnly ? "size-4" : "size-3.5"} />
-      {!iconOnly && label}
-    </button>
-  )
-}
 
 export function DataSourcesDialog({
   open,
@@ -62,7 +28,7 @@ export function DataSourcesDialog({
             limits.
           </DialogDescription>
         </DialogHeader>
-        <div className="grid gap-5 overflow-y-auto p-4">
+        <div className="grid gap-5 overflow-x-hidden overflow-y-auto p-4">
           {DATA_GROUPS.map((group) => (
             <section key={group.title} className="grid gap-2">
               <div>

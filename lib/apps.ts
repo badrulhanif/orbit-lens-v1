@@ -13,8 +13,10 @@ type AppDef = {
   label: string
   /** Radar layer to show for this application. */
   layer: SarLayer
-  /** Which past hazards are relevant. */
+  /** Which past hazards are relevant to the analysis. */
   hazards: HazardType[]
+  /** The recorded events this chip filters to: its own hazard only. */
+  types: HazardType[]
   /** Compare the latest pass with the previous one, or the earliest. */
   baseline: "previous" | "earliest"
   /** One line on what the radar shows for this. */
@@ -29,6 +31,7 @@ export const APPS: AppDef[] = [
     label: "Flood",
     layer: "signal",
     hazards: ["flood", "storm"],
+    types: ["flood"],
     baseline: "previous",
     measures:
       "Water is smooth, so it bounces the radar away and looks dark. New dark areas between passes mean new water.",
@@ -39,6 +42,7 @@ export const APPS: AppDef[] = [
     label: "Subsidence",
     layer: "movement",
     hazards: ["landslide", "earthquake"],
+    types: [],
     baseline: "previous",
     measures:
       "Interferograms compare two passes 12 days apart; colour fringes show ground moving toward or away from the satellite.",
@@ -49,6 +53,7 @@ export const APPS: AppDef[] = [
     label: "Landslide",
     layer: "movement",
     hazards: ["landslide"],
+    types: ["landslide"],
     baseline: "previous",
     measures:
       "Where the ground surface changes between passes, the radar signal loses coherence. New patches of lost coherence can mean slope failure.",
@@ -59,6 +64,7 @@ export const APPS: AppDef[] = [
     label: "Forest",
     layer: "signal",
     hazards: ["wildfire"],
+    types: ["wildfire"],
     baseline: "earliest",
     measures:
       "L-band's cross-polarised echo (HV) is strong from tree canopies. Where it drops, forest has been cleared or disturbed.",
@@ -69,6 +75,7 @@ export const APPS: AppDef[] = [
     label: "Agriculture",
     layer: "signal",
     hazards: ["flood"],
+    types: [],
     baseline: "previous",
     measures:
       "On open and crop land the echo gets brighter with wetter soil and growing crops, and darker as fields dry or are harvested.",
@@ -79,6 +86,7 @@ export const APPS: AppDef[] = [
     label: "Earthquake",
     layer: "movement",
     hazards: ["earthquake", "tsunami", "volcano"],
+    types: ["earthquake", "tsunami", "volcano"],
     baseline: "previous",
     measures:
       "An interferogram spanning an earthquake shows the ground shift as rings of colour around the fault; damaged ground loses coherence.",
@@ -156,3 +164,9 @@ export const DATA_PORTALS = [
     note: "What each product level contains",
   },
 ]
+
+/** The hazard filter: one application's hazards, or everything. */
+export type HazardFilter = AppId | "all"
+
+export const inFilter = (type: HazardType, filter: HazardFilter) =>
+  filter === "all" || appById(filter).types.includes(type)

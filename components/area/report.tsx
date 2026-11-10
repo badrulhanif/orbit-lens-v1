@@ -121,8 +121,8 @@ function ReportView({ doc }: { doc: ReportDoc }) {
                 ))}
               </ul>
             ) : b.kind === "table" ? (
-              <div key={i} className="overflow-x-auto">
-                <table className="w-full">
+              <div key={i} className="min-w-0">
+                <table className="w-full table-fixed wrap-break-word">
                   {b.head.length > 0 && (
                     <thead>
                       <tr className="text-left text-muted-foreground">

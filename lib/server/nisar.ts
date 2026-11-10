@@ -31,6 +31,7 @@ type AsfResult = {
   path: number | null
   wkt: string
   browse: string[]
+  downloadUrl?: string
   nisar?: { additionalUrls?: string[] }
 }
 
@@ -44,8 +45,12 @@ function asfSearch(params: Record<string, string>): Promise<AsfResult[]> {
   return searches.get(
     url.toString(),
     async () =>
-      (await fetchJson<{ results?: AsfResult[] }>(url, { timeoutMs: 15_000 }))
-        .results ?? []
+      (
+        await fetchJson<{ results?: AsfResult[] }>(url, {
+          timeoutMs: 15_000,
+          revalidate: 1800,
+        })
+      ).results ?? []
   )
 }
 
@@ -212,6 +217,12 @@ const scenes = new TtlCache<LoadedScene>(40)
 
 export function isGranuleName(name: string) {
   return NAME_RE.test(name)
+}
+
+/** The full product file (HDF5) for a granule name, if ASF has it. */
+export async function granuleUrl(granule: string) {
+  const [result] = await asfSearch({ granule_list: granule })
+  return result?.downloadUrl ?? null
 }
 
 export function loadScene(granule: string): Promise<LoadedScene> {

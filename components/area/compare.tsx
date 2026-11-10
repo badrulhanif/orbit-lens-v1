@@ -6,9 +6,16 @@ import { LayersIcon } from "lucide-react"
 import { analysisBox, type AnalysisOverlay } from "@/components/analysis-card"
 import { Loading, Stat } from "@/components/area/ui"
 import { Button } from "@/components/ui/button"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import type { useNisar } from "@/hooks/use-nisar"
-import type { AppId } from "@/lib/apps"
-import { areaQuery, type Bbox } from "@/lib/area"
+import { type AppId, type HazardFilter } from "@/lib/apps"
+import { areaQuery, type Bbox, type Period } from "@/lib/area"
 import { passDay, type SarLayer } from "@/lib/sar"
 import { type PassOption, passOptions } from "@/lib/sar-options"
 import { cn } from "@/lib/utils"
@@ -25,6 +32,12 @@ export type CompareControls = {
   /** Selected application (flood, forest…) and its change-map overlay. */
   app: AppId
   onAppChange: (app: AppId) => void
+  /** Which hazards the list and map show (an app's, or all). */
+  filter: HazardFilter
+  onFilterChange: (filter: HazardFilter) => void
+  /** How far back the list and map look. */
+  period: Period
+  onPeriodChange: (period: Period) => void
   overlay: AnalysisOverlay | null
   onOverlay: (overlay: AnalysisOverlay | null) => void
 }
@@ -266,20 +279,28 @@ function DateSelect({
   onChange: (key: number) => void
 }) {
   return (
-    <label className="grid gap-1 text-[11px] font-medium text-muted-foreground">
+    <div className="grid min-w-0 gap-1 text-[11px] font-medium text-muted-foreground">
       {label}
-      <select
+      <Select
         value={value}
-        onChange={(e) => onChange(Number(e.target.value))}
-        className="h-9 w-full min-w-0 rounded-lg border bg-background px-2 text-xs text-foreground"
+        onValueChange={(v) => v !== null && onChange(Number(v))}
+        items={options.map((o) => ({ value: o.key, label: o.label }))}
       >
-        {options.map((o) => (
-          <option key={o.key} value={o.key}>
-            {o.label}
-          </option>
-        ))}
-      </select>
-    </label>
+        <SelectTrigger
+          aria-label={label}
+          className="h-9 w-full min-w-0 text-xs"
+        >
+          <SelectValue className="truncate" />
+        </SelectTrigger>
+        <SelectContent>
+          {options.map((o) => (
+            <SelectItem key={o.key} value={o.key} className="text-xs">
+              {o.label}
+            </SelectItem>
+          ))}
+        </SelectContent>
+      </Select>
+    </div>
   )
 }
 

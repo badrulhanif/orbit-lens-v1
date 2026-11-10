@@ -1,13 +1,12 @@
 "use client"
 
-import * as React from "react"
-import { CloudRainIcon } from "lucide-react"
+import { CheckIcon, CloudRainIcon, TentIcon, UsersIcon } from "lucide-react"
 
-import { EventSection } from "@/components/area/events"
+import { Tip } from "@/components/tip"
 import type { HistoryEvent, Warning } from "@/lib/area"
 import { cn } from "@/lib/utils"
 
-const when = (iso: string) =>
+const until = (iso: string) =>
   new Intl.DateTimeFormat("en-GB", {
     day: "numeric",
     month: "short",
@@ -17,7 +16,6 @@ const when = (iso: string) =>
     timeZone: "Asia/Kuala_Lumpur",
   }).format(new Date(`${iso.replace(" ", "T")}+08:00`))
 
-/** Total evacuees across open relief centres. */
 function evacuees(centres: HistoryEvent[]) {
   return centres
     .flatMap((e) => e.impacts ?? [])
@@ -26,93 +24,105 @@ function evacuees(centres: HistoryEvent[]) {
 }
 
 /**
- * MetMalaysia warnings and JKM relief centres open right now, above the
- * history. Says so plainly when there's nothing.
+ * One line, like a weather strip: MetMalaysia warnings in force and JKM
+ * relief centres open now. The centres themselves are in the list below.
  */
 export function HappeningNow({
-  name,
   warnings,
   centres,
   checked,
-  onSelect,
 }: {
-  name: string
   warnings: Warning[]
   centres: HistoryEvent[]
   /** Whether the live sources answered. */
   checked: boolean
-  onSelect: (id: string) => void
 }) {
-  if (!warnings.length && !centres.length) {
-    if (!checked) return null
-    return (
-      <p className="flex items-center gap-2 rounded-xl bg-emerald-500/10 px-3 py-2 text-xs text-emerald-800 dark:text-emerald-300">
-        <span className="size-1.5 shrink-0 rounded-full bg-emerald-500" />
-        No weather warnings or open relief centres for {name} right now.
-      </p>
-    )
-  }
-  const people = evacuees(centres)
-  return (
-    <section className="grid gap-2">
-      <h3 className="flex items-center gap-1.5 text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
-        <span className="size-1.5 animate-pulse rounded-full bg-red-500" />
-        Happening now
-      </h3>
-      {warnings.map((w) => (
-        <WarningCard key={w.id} warning={w} />
-      ))}
-      {centres.length > 0 && (
-        <EventSection
-          title={`Relief centres open · ${people.toLocaleString("en-GB")} evacuees`}
-          events={centres}
-          onSelect={onSelect}
-        />
-      )}
-    </section>
-  )
-}
-
-function WarningCard({ warning }: { warning: Warning }) {
-  const [open, setOpen] = React.useState(false)
+  if (!checked && !warnings.length && !centres.length) return null
   // Levels are written in capitals: "(SEVERE)", "DANGER" (not "dangerous").
-  const severe = /\b(SEVERE|DANGER)\b/.test(warning.text)
-  const atSea = /\bwaters of\b/i.test(warning.text)
+  const severe = warnings.some((w) => /\b(SEVERE|DANGER)\b/.test(w.text))
+  const people = evacuees(centres)
+  const clear = !warnings.length && !centres.length
+
   return (
     <div
       className={cn(
-        "grid gap-1 rounded-xl border p-3 text-xs",
-        severe
-          ? "border-red-500/30 bg-red-500/5"
-          : "border-amber-500/30 bg-amber-500/5"
+        "flex flex-wrap items-center gap-x-4 gap-y-1 rounded-xl px-3 py-2 text-xs",
+        clear ? "bg-emerald-500/10" : "bg-muted/70"
       )}
     >
-      <p className="flex items-center gap-1.5 text-sm font-medium">
-        <CloudRainIcon
+      <span className="flex items-center gap-1.5 font-semibold tracking-wide text-muted-foreground uppercase">
+        <span
           className={cn(
-            "size-4 shrink-0",
-            severe ? "text-red-600" : "text-amber-600"
+            "size-1.5 rounded-full",
+            clear ? "bg-emerald-500" : "animate-pulse bg-red-500"
           )}
         />
-        {warning.title}
-      </p>
-      <p className="text-muted-foreground">
-        MetMalaysia
-        {atSea && " · coastal waters"}
-        {warning.validTo && ` · until ${when(warning.validTo)}`}
-      </p>
-      <p className={cn("leading-relaxed", !open && "line-clamp-3")}>
-        {warning.text}
-      </p>
-      {warning.text.length > 180 && (
-        <button
-          type="button"
-          onClick={() => setOpen((o) => !o)}
-          className="justify-self-start font-medium text-muted-foreground hover:text-foreground"
+        Now
+      </span>
+      {clear ? (
+        <Item
+          icon={<CheckIcon />}
+          tone="text-emerald-700 dark:text-emerald-300"
         >
-          {open ? "Show less" : "Show all"}
-        </button>
+          All clear
+        </Item>
+      ) : (
+        <>
+          {warnings.length > 0 && (
+            <Item
+              icon={<CloudRainIcon />}
+              tone={severe ? "text-red-600" : "text-amber-600"}
+              title={warnings
+                .map(
+                  (w) =>
+                    `${w.title}${w.validTo ? `, until ${until(w.validTo)}` : ""}`
+                )
+                .join("\n")}
+            >
+              {warnings.length} {warnings.length === 1 ? "warning" : "warnings"}
+            </Item>
+          )}
+          {centres.length > 0 && (
+            <Item
+              icon={<TentIcon />}
+              tone="text-sky-600"
+              title="JKM relief centres open now"
+            >
+              {centres.length} {centres.length === 1 ? "centre" : "centres"}
+            </Item>
+          )}
+          {people > 0 && (
+            <Item
+              icon={<UsersIcon />}
+              tone="text-sky-600"
+              title="People in relief centres"
+            >
+              {people.toLocaleString("en-GB")}
+            </Item>
+          )}
+        </>
       )}
     </div>
+  )
+}
+
+function Item({
+  icon,
+  tone,
+  title,
+  children,
+}: {
+  icon: React.ReactNode
+  tone: string
+  title?: string
+  children: React.ReactNode
+}) {
+  return (
+    <Tip label={title}>
+      <span className="flex items-center gap-1 font-medium tabular-nums">
+        <span className={cn("[&_svg]:size-3.5", tone)}>{icon}</span>
+        {children}
+      </span>
+    </Tip>
   )
 }

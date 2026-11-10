@@ -1,3 +1,6 @@
+import Flatbush from "flatbush"
+
+import type { Bbox } from "@/lib/area"
 import type { LatLng } from "@/lib/geo"
 import { inRings } from "@/lib/server/boundaries"
 
@@ -8,18 +11,21 @@ import { inRings } from "@/lib/server/boundaries"
  */
 
 type Ring = [number, number][]
-type Indexed = { ring: Ring; box: [number, number, number, number] }
+/** The rings, and a spatial index of their boxes (Flatbush). */
+type Land = { rings: Ring[]; index: Flatbush | null }
 
 /** Points this close to the coast count as onshore (coastal towns). */
 const COAST_TOLERANCE_KM = 3
 
-let land: Promise<Indexed[]> | null = null
+let land: Promise<Land> | null = null
 
 function load() {
   land ??= import("@/data/land.json")
     .then((m) => {
       const rings = ((m.default ?? m) as unknown as { rings: Ring[] }).rings
-      return rings.map((ring) => {
+      if (!rings.length) return { rings, index: null }
+      const index = new Flatbush(rings.length)
+      for (const ring of rings) {
         let w = 180,
           s = 90,
           e = -180,
@@ -30,10 +36,12 @@ function load() {
           if (y < s) s = y
           if (y > n) n = y
         }
-        return { ring, box: [w, s, e, n] as Indexed["box"] }
-      })
+        index.add(w, s, e, n)
+      }
+      index.finish()
+      return { rings, index }
     })
-    .catch(() => [])
+    .catch(() => ({ rings: [], index: null }))
   return land
 }
 
@@ -60,18 +68,18 @@ function distanceToRingKm(p: LatLng, ring: Ring) {
  * (outside the data window or data missing) counts as onshore.
  */
 export async function isOffshore(p: LatLng) {
-  const rings = await load()
-  if (!rings.length) return false
+  const { rings, index } = await load()
+  if (!index) return false
   const pad = COAST_TOLERANCE_KM / 111 / Math.cos((p.latitude * Math.PI) / 180)
-  for (const { ring, box } of rings) {
-    if (
-      p.longitude < box[0] - pad ||
-      p.longitude > box[2] + pad ||
-      p.latitude < box[1] - pad ||
-      p.latitude > box[3] + pad
-    ) {
-      continue
-    }
+  // Only the land whose box (plus the coast margin) holds the point.
+  const near = index.search(
+    p.longitude - pad,
+    p.latitude - pad,
+    p.longitude + pad,
+    p.latitude + pad
+  )
+  for (const i of near) {
+    const ring = rings[i]
     if (inRings(p, [ring])) return false
     if (distanceToRingKm(p, ring) <= COAST_TOLERANCE_KM) return false
   }
@@ -80,4 +88,11 @@ export async function isOffshore(p: LatLng) {
   return (
     p.longitude > 92 && p.longitude < 128 && p.latitude > -12 && p.latitude < 22
   )
+}
+
+/** Land outlines that reach into a box (for masking out the sea). */
+export async function landRingsIn([w, s, e, n]: Bbox): Promise<Ring[] | null> {
+  const { rings, index } = await load()
+  if (!index) return null
+  return index.search(w, s, e, n).map((i) => rings[i])
 }

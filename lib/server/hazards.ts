@@ -306,7 +306,9 @@ async function usgsQuakes(
     `&maxradiuskm=3000&minmagnitude=4.5&starttime=${start}&orderby=magnitude&limit=50`
   const features = await usgsCache.get(
     url,
-    async () => (await fetchJson<{ features: UsgsFeature[] }>(url)).features
+    async () =>
+      (await fetchJson<{ features: UsgsFeature[] }>(url, { revalidate: 3600 }))
+        .features
   )
   return features
     .map((f) => {

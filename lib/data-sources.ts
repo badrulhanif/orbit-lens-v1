@@ -28,7 +28,7 @@ export const DATA_GROUPS: {
         by: "NASA-ISRO, via the Alaska Satellite Facility (ASF DAAC)",
         url: "https://search.asf.alaska.edu/",
         gives:
-          "Ground movement (GUNW interferograms) and radar brightness (GCOV) for every pass",
+          "Ground movement (GUNW interferograms) and radar brightness (GCOV) for every pass. Measured movement (mm, with weather and ionosphere corrections) and land cover (km²) are read from the full GUNW and GCOV products, only the tiles over an area",
         coverage:
           "Every 12 days since late 2025; newest passes are provisional",
         licence: "NASA open data",
@@ -128,7 +128,8 @@ export const DATA_GROUPS: {
         name: "Natural Earth",
         by: "Natural Earth",
         url: "https://www.naturalearthdata.com/",
-        gives: "Coastlines, to tell offshore events from those on land",
+        gives:
+          "Coastlines: tells offshore events from those on land, and keeps the sea out of radar water and land-cover figures",
         coverage: "1:10 million scale",
         licence: "Public domain",
       },
@@ -166,6 +167,7 @@ export const DATA_GROUPS: {
 export const DATA_CAVEATS = [
   "Event lists only include what these sources recorded; no record doesn't mean nothing happened.",
   "Flood points from GDACS mark where a flood was reported, not its full extent. Impact figures are as reported by national agencies.",
-  "Radar analysis uses NASA's preview images, so areas and changes are estimates. Measuring in mm/year needs the full NISAR products.",
+  "Quick radar figures use NASA's preview images, so they're estimates. Measured values come from the full NISAR products: movement relative to the area's median, land cover from brightness thresholds calibrated over Kuala Lumpur.",
+  "Yearly rates (mm/yr) need at least 6 months of passes; before that the app shows total movement over the period instead.",
   "Relief centre locations are exact; the flooded area is usually nearby.",
 ]

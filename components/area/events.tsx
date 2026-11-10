@@ -14,7 +14,8 @@ import {
   WavesIcon,
 } from "lucide-react"
 
-import { DataInfoButton } from "@/components/data-sources-dialog"
+import { DataInfoButton } from "@/components/data-info"
+import { Tip } from "@/components/tip"
 import {
   formatEventDate,
   HAZARD_COLOR,
@@ -22,7 +23,6 @@ import {
   type HistoryEvent,
   type Impact,
   precisionOf,
-  SOURCE_COVERAGE,
 } from "@/lib/area"
 import { cn } from "@/lib/utils"
 
@@ -43,19 +43,13 @@ export const HAZARD_ICON: Record<HazardType, LucideIcon> = {
   disaster: TriangleAlertIcon,
 }
 
-export function countByType(events: HistoryEvent[]) {
-  const counts = new Map<HazardType, number>()
-  for (const e of events) counts.set(e.type, (counts.get(e.type) ?? 0) + 1)
-  return [...counts].sort((a, b) => b[1] - a[1])
-}
-
 export function EventSection({
   title,
   events,
   empty,
   onSelect,
 }: {
-  title: string
+  title?: string
   events: HistoryEvent[]
   empty?: string
   onSelect: (id: string) => void
@@ -63,9 +57,11 @@ export function EventSection({
   if (!events.length && !empty) return null
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-2">
-      <h3 className="text-xs font-semibold tracking-wide text-muted-foreground uppercase">
-        {title} · {events.length}
-      </h3>
+      {title && (
+        <h3 className="truncate text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+          {title} · {events.length}
+        </h3>
+      )}
       {events.length ? (
         events.map((e) => <EventRow key={e.id} event={e} onSelect={onSelect} />)
       ) : (
@@ -121,32 +117,31 @@ function EventRow({
             .filter(Boolean)
             .join(" · ")}
         </span>
-        <span
-          title={precision.hint}
-          className={cn(
-            "mt-1 inline-block rounded px-1.5 py-px text-[10px] font-medium",
-            PRECISION_TONE[precision.tone]
-          )}
-        >
-          {precision.label}
-          {stateWide && ` · ${event.source}`}
-        </span>
-        {event.live && (
+        <Tip label={precision.hint}>
           <span
-            title="Open now (JKM InfoBencana)"
-            className="mt-1 ml-1 inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-px text-[10px] font-medium text-emerald-700 dark:text-emerald-300"
+            className={cn(
+              "mt-1 inline-block rounded px-1.5 py-px text-[10px] font-medium",
+              PRECISION_TONE[precision.tone]
+            )}
           >
-            <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
-            Open now
+            {precision.label}
+            {stateWide && ` · ${event.source}`}
           </span>
+        </Tip>
+        {event.live && (
+          <Tip label="Open now (JKM InfoBencana)">
+            <span className="mt-1 ml-1 inline-flex items-center gap-1 rounded bg-emerald-500/10 px-1.5 py-px text-[10px] font-medium text-emerald-700 dark:text-emerald-300">
+              <span className="size-1.5 animate-pulse rounded-full bg-emerald-500" />
+              Open now
+            </span>
+          </Tip>
         )}
         {event.offshore && (
-          <span
-            title="At sea, inside the state's waters"
-            className="mt-1 ml-1 inline-block rounded bg-blue-500/10 px-1.5 py-px text-[10px] font-medium text-blue-700 dark:text-blue-300"
-          >
-            Offshore
-          </span>
+          <Tip label="At sea, inside the state's waters">
+            <span className="mt-1 ml-1 inline-block rounded bg-blue-500/10 px-1.5 py-px text-[10px] font-medium text-blue-700 dark:text-blue-300">
+              Offshore
+            </span>
+          </Tip>
         )}
       </span>
       {stateWide ? (
@@ -191,15 +186,7 @@ function EventRow({
   )
 }
 
-export function Dot({ type }: { type: HazardType }) {
-  return (
-    <span
-      className="size-2 shrink-0 rounded-full"
-      style={{ background: HAZARD_COLOR[type] }}
-    />
-  )
-}
-
+/** Sources in one line; the info icon opens the full list and limits. */
 export function SourcesNote({
   sources,
 }: {
@@ -208,20 +195,11 @@ export function SourcesNote({
   const down = sources?.filter((s) => !s.ok) ?? []
   return (
     <div className="grid gap-1 text-[11px] leading-snug text-muted-foreground">
-      <div className="flex items-center justify-between gap-2">
-        <p className="font-medium text-foreground/80">
-          What these records cover
-        </p>
-        <DataInfoButton label="All data sources" />
-      </div>
-      <ul className="grid gap-0.5">
-        {SOURCE_COVERAGE.map((line) => (
-          <li key={line}>· {line}</li>
-        ))}
-      </ul>
-      <p>
-        Only events these sources list are shown; absence isn&apos;t proof
-        nothing happened.
+      <p className="flex items-center gap-1.5">
+        <span className="min-w-0 flex-1 truncate">
+          Sources: USGS · GDACS · NASA · Wikipedia · JKM · MetMalaysia
+        </span>
+        <DataInfoButton iconOnly label="About the data and its limits" />
       </p>
       {down.length > 0 && (
         <p className="text-destructive">
@@ -233,6 +211,40 @@ export function SourcesNote({
   )
 }
 
+export type SortKey = "newest" | "oldest" | "affected" | "name"
+
+export const SORTS: { id: SortKey; label: string }[] = [
+  { id: "newest", label: "Newest first" },
+  { id: "oldest", label: "Oldest first" },
+  { id: "affected", label: "Most severe" },
+  { id: "name", label: "A–Z" },
+]
+
+/** People affected (reported impacts), else earthquake magnitude. */
+function severity(e: HistoryEvent) {
+  const people = (e.impacts ?? [])
+    .filter((i) => !i.kind.includes("house"))
+    .reduce((n, i) => n + i.value, 0)
+  const mag = Number(e.title.match(/^M([\d.]+)/)?.[1] ?? 0)
+  return [people, mag] as const
+}
+
+export function sortEvents(events: HistoryEvent[], key: SortKey) {
+  const byDate = (a: HistoryEvent, b: HistoryEvent) =>
+    (b.date ?? "").localeCompare(a.date ?? "")
+  return [...events].sort((a, b) => {
+    if (key === "oldest")
+      return (a.date ?? "9999").localeCompare(b.date ?? "9999")
+    if (key === "name") return a.title.localeCompare(b.title)
+    if (key === "affected") {
+      const [pa, ma] = severity(a)
+      const [pb, mb] = severity(b)
+      return pb - pa || mb - ma || byDate(a, b)
+    }
+    return byDate(a, b)
+  })
+}
+
 /** Reported impacts by place (GDACS floods), largest first. */
 export function Impacts({ impacts }: { impacts: Impact[] }) {
   const [all, setAll] = React.useState(false)
@@ -240,7 +252,7 @@ export function Impacts({ impacts }: { impacts: Impact[] }) {
   return (
     <div className="grid gap-1.5 text-xs">
       <p className="text-sm font-semibold">Reported impacts</p>
-      <table className="w-full">
+      <table className="w-full table-fixed wrap-break-word">
         <tbody className="divide-y">
           {shown.map((i) => (
             <tr key={`${i.kind}|${i.region}`}>

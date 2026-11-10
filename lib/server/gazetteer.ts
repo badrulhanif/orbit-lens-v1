@@ -124,7 +124,60 @@ function matchQuality(keys: string[], q: string) {
   return best
 }
 
-type GazetteerHit = Place & { match: 0 | 1 | 2; rank: number }
+/**
+ * Edit distance where a swapped pair of letters counts as one typo
+ * ("bahru" → "bharu"). Stops early: anything over `max` returns max + 1.
+ */
+function typoDistance(a: string, b: string, max: number) {
+  if (Math.abs(a.length - b.length) > max) return max + 1
+  let prev2: number[] = []
+  let prev = Array.from({ length: b.length + 1 }, (_, j) => j)
+  for (let i = 1; i <= a.length; i++) {
+    const row = [i]
+    let low = i
+    for (let j = 1; j <= b.length; j++) {
+      const cost = a[i - 1] === b[j - 1] ? 0 : 1
+      let v = Math.min(prev[j] + 1, row[j - 1] + 1, prev[j - 1] + cost)
+      if (i > 1 && j > 1 && a[i - 1] === b[j - 2] && a[i - 2] === b[j - 1])
+        v = Math.min(v, prev2[j - 2] + 1)
+      row.push(v)
+      low = Math.min(low, v)
+    }
+    if (low > max) return max + 1
+    prev2 = prev
+    prev = row
+  }
+  return prev[b.length]
+}
+
+/** Typos allowed in a word: none in short words, more in long ones. */
+const typosAllowed = (n: number) => (n >= 8 ? 2 : n >= 5 ? 1 : 0)
+
+/**
+ * Every word typed matches a word of the name with a typo or two; the last
+ * word may still be half typed ("kota bahr" → "Kota Bharu").
+ */
+function typoMatch(keys: string[], words: string[]) {
+  return keys.some((key) => {
+    const parts = key.split(" ")
+    return words.every((w, i) => {
+      const max = typosAllowed(w.length)
+      const last = i === words.length - 1
+      return parts.some((p) => {
+        if (typoDistance(w, p, max) <= max) return true
+        if (!last) return false
+        // Half typed: compare with the start of the name, allowing for a
+        // missed or extra letter ("segmat" → "segamat").
+        for (let n = w.length - 1; n <= w.length + 1; n++)
+          if (n < p.length && typoDistance(w, p.slice(0, n), max) <= max)
+            return true
+        return false
+      })
+    })
+  })
+}
+
+type GazetteerHit = Place & { match: 0 | 1 | 2 | 3; rank: number }
 
 export async function searchGazetteer(
   query: string,
@@ -146,9 +199,28 @@ export async function searchGazetteer(
     hits.push({ e, m, d })
   }
 
+  // Few good matches: allow for typos ("segmat", "kota bahru"). Ranked last.
+  if (q.length >= 5 && hits.filter((h) => h.m < 2).length < 3) {
+    const words = q.split(" ")
+    const found = new Set(hits.map((h) => h.e))
+    for (const e of entries) {
+      if (found.has(e) || !typoMatch(e.keys, words)) continue
+      const [, lat, lon] = e.row
+      const d = centre
+        ? distanceMeters(centre, { latitude: lat, longitude: lon })
+        : 0
+      hits.push({ e, m: 3, d })
+    }
+  }
+
   hits.sort((a, b) => {
     // 1. How well the name matches.
     if (a.m !== b.m) return a.m - b.m
+    // Typo matches: nearby places (this region) before far-away ones.
+    if (a.m === 3) {
+      const far = (h: typeof a) => (h.d > 1_500_000 ? 1 : 0)
+      if (far(a) !== far(b)) return far(a) - far(b)
+    }
     const ka = a.e.row[3]
     const kb = b.e.row[3]
     // 2. Bigger kinds of place first (country → state → … → village).
@@ -181,7 +253,7 @@ export async function searchGazetteer(
         kind === "state" || kind === "district"
           ? `${kind}|${name}|${area}`
           : undefined,
-      match: m as 0 | 1 | 2,
+      match: m as 0 | 1 | 2 | 3,
       rank: RANK[kind],
     })
     if (out.length >= limit) break

@@ -147,3 +147,20 @@
 .event-hover {
   pointer-events: none;
 }
+
+/* Everything clickable shows the hand cursor (Tailwind v4 resets buttons
+   to the default arrow). */
+@layer base {
+  button:not(:disabled),
+  [role="button"]:not([aria-disabled="true"]),
+  [role="option"],
+  [role="radio"],
+  [role="tab"],
+  [role="combobox"],
+  [role="menuitem"],
+  summary,
+  label[for],
+  a[href] {
+    cursor: pointer;
+  }
+}

@@ -1,3 +1,5 @@
+import Flatbush from "flatbush"
+
 import type { Bbox } from "@/lib/area"
 
 /**
@@ -76,4 +78,42 @@ export function rasterMask(
     }
   }
   return mask
+}
+
+/** Spatial index of the outlines' boxes, for "which area holds this point". */
+let index: Promise<{ keys: string[]; tree: Flatbush } | null> | null = null
+
+function loadIndex() {
+  index ??= loadBoundaries().then((all) => {
+    const keys = Object.keys(all).filter((k) => all[k]?.length)
+    if (!keys.length) return null
+    const tree = new Flatbush(keys.length)
+    for (const k of keys) {
+      let w = 180,
+        s = 90,
+        e = -180,
+        n = -90
+      for (const ring of all[k]!)
+        for (const [x, y] of ring) {
+          if (x < w) w = x
+          if (x > e) e = x
+          if (y < s) s = y
+          if (y > n) n = y
+        }
+      tree.add(w, s, e, n)
+    }
+    tree.finish()
+    return { keys, tree }
+  })
+  return index
+}
+
+/** Outline keys (states, districts) whose outline holds a point. */
+export async function boundariesAt(p: { latitude: number; longitude: number }) {
+  const [all, idx] = await Promise.all([loadBoundaries(), loadIndex()])
+  if (!idx) return []
+  return idx.tree
+    .search(p.longitude, p.latitude, p.longitude, p.latitude)
+    .map((i) => idx.keys[i])
+    .filter((k) => inRings(p, all[k]!))
 }

@@ -44,7 +44,7 @@ export async function wikipediaSummaries(
         normalized?: { from: string; to: string }[]
         pages?: Record<string, { title: string; extract?: string }>
       }
-    }>(url, { timeoutMs: 8000 })
+    }>(url, { timeoutMs: 8000, revalidate: 86400 })
     const q = data.query ?? {}
     const byTitle = new Map(
       Object.values(q.pages ?? {}).map((p) => [p.title, p.extract ?? null])

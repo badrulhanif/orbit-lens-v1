@@ -1,0 +1,7 @@
+# Only the measurement service is built with Docker (workers/nisar/Dockerfile).
+*
+!workers/nisar/requirements.txt
+!workers/nisar/reader.py
+!workers/nisar/server.py
+!data/land.json
+!data/boundaries.json

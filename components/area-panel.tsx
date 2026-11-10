@@ -2,37 +2,52 @@
 
 import * as React from "react"
 import {
+  ArrowDownUpIcon,
+  CalendarIcon,
   ArrowLeftRightIcon,
   ChevronLeftIcon,
   ExternalLinkIcon,
   XIcon,
 } from "lucide-react"
 
-import { AnalysisCard, AppPicker } from "@/components/analysis-card"
+import {
+  AnalysisCard,
+  analysisBox,
+  AppPicker,
+} from "@/components/analysis-card"
 import { Compare, type CompareControls } from "@/components/area/compare"
 import {
-  countByType,
-  Dot,
   EventSection,
   HAZARD_ICON,
   HoverContext,
   Impacts,
+  SORTS,
+  sortEvents,
   SourcesNote,
+  type SortKey,
 } from "@/components/area/events"
 import { HappeningNow } from "@/components/area/live"
+import { ShareButton } from "@/components/share-button"
+import { measuredPairUrl } from "@/components/measured"
 import { Report, slug } from "@/components/area/report"
 import { areaReport, spotReport } from "@/components/area/report-doc"
-import {
-  Chip,
-  Field,
-  Loading,
-  Stat,
-  type Tab,
-  Tabs,
-} from "@/components/area/ui"
+import { Field, Loading, Stat, type Tab, Tabs } from "@/components/area/ui"
 import { Button } from "@/components/ui/button"
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "@/components/ui/select"
 import { useArea, type AreaData } from "@/hooks/use-area"
-import type { AppId } from "@/lib/apps"
+import {
+  appById,
+  APPS,
+  inFilter,
+  type AppId,
+  type HazardFilter,
+} from "@/lib/apps"
 import {
   type Bbox,
   formatEventDate,
@@ -41,6 +56,9 @@ import {
   type HazardType,
   type HistoryEvent,
   precisionOf,
+  inPeriod,
+  PERIODS,
+  type Period,
 } from "@/lib/area"
 import type { Place } from "@/lib/geo"
 import { formatRange } from "@/lib/sar"
@@ -127,11 +145,34 @@ function AreaView({
 }) {
   const [tab, setTab] = React.useState<Tab>("overview")
   const [analysisLines, setAnalysisLines] = React.useState<string[]>([])
-  // Open relief centres are "now", not history. Events at sea within the
-  // state's waters are listed (and counted) apart.
+
+  // Start reading the measured movement now, so it's ready when a movement
+  // hazard (subsidence, landslide, earthquake) is picked.
+  const movement = area.radar.data?.movement
+  const prefetch =
+    area.bbox && movement
+      ? measuredPairUrl(movement.cycles, analysisBox(area.bbox))
+      : null
+  React.useEffect(() => {
+    if (prefetch) fetch(prefetch).catch(() => {})
+  }, [prefetch])
+
+  // Open relief centres are "now" (the strip and the map), not history.
+  // Events at sea within the state's waters are listed (and counted) apart.
   const live = events.filter((e) => e.live)
-  const onshore = events.filter((e) => !e.live && !e.offshore)
-  const offshore = events.filter((e) => !e.live && e.offshore)
+  const history = events.filter((e) => !e.live)
+  const onshore = history.filter((e) => !e.offshore)
+  const offshore = history.filter((e) => e.offshore)
+  const counts = area.history.data
+    ? (Object.fromEntries(
+        (["all", ...APPS.map((a) => a.id)] as HazardFilter[]).map((f) => [
+          f,
+          history.filter(
+            (e) => inFilter(e.type, f) && inPeriod(e.date, compare.period)
+          ).length,
+        ])
+      ) as Record<HazardFilter, number>)
+    : null
 
   return (
     <>
@@ -147,6 +188,7 @@ function AreaView({
           </h2>
           <p className="text-xs text-muted-foreground">{place.kind}</p>
         </div>
+        <ShareButton />
         <Button
           variant="outline"
           size="icon-sm"
@@ -156,9 +198,15 @@ function AreaView({
           <XIcon />
         </Button>
       </header>
-      <AppPicker value={compare.app} onChange={compare.onAppChange} />
+      <AppPicker
+        value={compare.filter}
+        counts={counts}
+        onChange={(f) =>
+          f === "all" ? compare.onFilterChange("all") : compare.onAppChange(f)
+        }
+      />
       <Tabs tab={tab} onChange={setTab} />
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3 wrap-break-word">
         {tab === "overview" && (
           <AreaOverview
             place={place}
@@ -166,6 +214,9 @@ function AreaView({
             onshore={onshore}
             offshore={offshore}
             live={live}
+            filter={compare.filter}
+            period={compare.period}
+            onPeriodChange={compare.onPeriodChange}
             onSelectEvent={onSelectEvent}
             analysis={
               <AnalysisCard
@@ -214,6 +265,9 @@ function AreaOverview({
   onshore,
   offshore,
   live,
+  filter,
+  period,
+  onPeriodChange,
   onSelectEvent,
   analysis,
 }: {
@@ -222,27 +276,50 @@ function AreaOverview({
   onshore: HistoryEvent[]
   offshore: HistoryEvent[]
   live: HistoryEvent[]
+  filter: HazardFilter
+  period: Period
+  onPeriodChange: (period: Period) => void
   onSelectEvent: (id: string) => void
   analysis: React.ReactNode
 }) {
   const { history, radar } = area
-  const [filter, setFilter] = React.useState<HazardType | "all">("all")
-  const earliest = onshore
+  const [sort, setSort] = React.useState<SortKey>("newest")
+  const cycles = radar.data?.movement?.cycles.length ?? 0
+  // Stats, list and map all follow the hazard filter.
+  const pass = (e: HistoryEvent) =>
+    inFilter(e.type, filter) && inPeriod(e.date, period)
+  const inArea = onshore.filter(pass)
+  const shown = sortEvents(inArea, sort)
+  const atSea = sortEvents(offshore.filter(pass), sort)
+  const byDate = sortEvents(inArea, "newest")
+  const earliest = byDate
     .filter((e) => e.date)
     .at(-1)
     ?.date?.slice(0, 4)
-  const latest = onshore[0]
-  const cycles = radar.data?.movement?.cycles.length ?? 0
-  const types = countByType([...onshore, ...offshore])
-  const pass = (e: HistoryEvent) => filter === "all" || e.type === filter
+  const latest = byDate[0]
+  // State-wide records and floods reported here from elsewhere have no
+  // point in the area, so they're listed but not on the map.
+  const onMap = (e: HistoryEvent) =>
+    !e.scope || e.scope === "site"
+      ? !(e.latitude === 0 && e.longitude === 0)
+      : false
+  const offMap = shown.filter((e) => !onMap(e)).length
+  const what =
+    filter === "all"
+      ? "hazards"
+      : `${appById(filter).label.toLowerCase()} events`
 
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       <div className="grid grid-cols-3 gap-2 *:min-w-0">
         <Stat
           tone="warm"
-          label="Recorded events"
-          value={history.loading ? "…" : String(onshore.length)}
+          label={
+            filter === "all"
+              ? "Recorded events"
+              : `${appById(filter).label} events`
+          }
+          value={history.loading ? "…" : String(inArea.length)}
           sub={earliest ? `since ${earliest}` : "in this area"}
         />
         <Stat
@@ -261,17 +338,22 @@ function AreaOverview({
 
       {history.data && (
         <HappeningNow
-          name={place.name}
           warnings={history.data.warnings}
           centres={live}
           checked={history.data.sources.some(
             (s) => s.name === "JKM relief centres" && s.ok
           )}
-          onSelect={onSelectEvent}
         />
       )}
 
-      {analysis}
+      {/* The radar overview is per hazard: hidden for "All". */}
+      {filter === "all" ? (
+        <p className="text-xs text-muted-foreground">
+          Pick a hazard above for its NISAR radar overview.
+        </p>
+      ) : (
+        analysis
+      )}
 
       {history.loading ? (
         <Loading>Checking hazard records for {place.name}…</Loading>
@@ -279,38 +361,47 @@ function AreaOverview({
         <p className="text-sm text-destructive">{history.error}</p>
       ) : (
         <>
-          {types.length > 1 && (
-            <div className="flex flex-wrap gap-1.5">
-              <Chip on={filter === "all"} onClick={() => setFilter("all")}>
-                All
-              </Chip>
-              {types.map(([type, n]) => (
-                <Chip
-                  key={type}
-                  on={filter === type}
-                  onClick={() => setFilter(type)}
-                >
-                  <Dot type={type} />
-                  {HAZARD_LABEL[type]}
-                  <span className="tabular-nums opacity-70">{n}</span>
-                </Chip>
-              ))}
+          <div className="grid gap-2">
+            <div className="flex items-center justify-between gap-2">
+              <Choice
+                label="Period"
+                icon={<CalendarIcon />}
+                value={period}
+                options={PERIODS}
+                onChange={onPeriodChange}
+              />
+              <Choice
+                label="Sort"
+                icon={<ArrowDownUpIcon />}
+                value={sort}
+                options={SORTS}
+                onChange={setSort}
+                align="end"
+              />
             </div>
-          )}
-
+            <h3 className="min-w-0 truncate text-[11px] font-semibold tracking-wider text-muted-foreground uppercase">
+              In {place.name} · {shown.length}
+              {offMap > 0 && (
+                <span className="font-normal tracking-normal normal-case">
+                  {" "}
+                  ({shown.length - offMap} on map)
+                </span>
+              )}
+            </h3>
+            <EventSection
+              events={shown}
+              empty={`No recorded ${what} in ${place.name} in these sources.`}
+              onSelect={onSelectEvent}
+            />
+          </div>
           <EventSection
-            title={`In ${place.name}`}
-            events={onshore.filter(pass)}
-            empty={`No recorded hazards inside ${place.name} in these sources.`}
-            onSelect={onSelectEvent}
-          />
-          <EventSection
-            title="Offshore, in state waters"
-            events={offshore.filter(pass)}
+            title="Nearby, offshore"
+            events={atSea}
             onSelect={onSelectEvent}
           />
         </>
       )}
+
       <SourcesNote sources={area.history.data?.sources} />
     </div>
   )
@@ -402,14 +493,17 @@ function SpotView({
             <ChevronLeftIcon className="size-4" />
             {areaName}
           </button>
-          <Button
-            variant="outline"
-            size="icon-sm"
-            aria-label="Close area"
-            onClick={onClose}
-          >
-            <XIcon />
-          </Button>
+          <div className="flex gap-1.5">
+            <ShareButton />
+            <Button
+              variant="outline"
+              size="icon-sm"
+              aria-label="Close area"
+              onClick={onClose}
+            >
+              <XIcon />
+            </Button>
+          </div>
         </div>
         <div className="flex items-start gap-3">
           <span
@@ -432,7 +526,7 @@ function SpotView({
         </div>
       </header>
       <Tabs tab={tab} onChange={setTab} />
-      <div className="min-h-0 flex-1 overflow-y-auto p-3">
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto p-3">
         {tab === "overview" && (
           <>
             <SpotOverview
@@ -442,17 +536,17 @@ function SpotView({
               near={near}
               onSelectEvent={onSelectEvent}
               onCompare={() => setTab("compare")}
+              analysis={
+                <AnalysisCard
+                  app={SPOT_APP[event.type] ?? compare.app}
+                  area={spot}
+                  events={[event]}
+                  eventDate={event.date}
+                  overlay={compare.overlay}
+                  onOverlay={compare.onOverlay}
+                />
+              }
             />
-            <div className="mt-4">
-              <AnalysisCard
-                app={SPOT_APP[event.type] ?? compare.app}
-                area={spot}
-                events={[event]}
-                eventDate={event.date}
-                overlay={compare.overlay}
-                onOverlay={compare.onOverlay}
-              />
-            </div>
           </>
         )}
         {tab === "compare" && (
@@ -490,6 +584,7 @@ function SpotOverview({
   near,
   onSelectEvent,
   onCompare,
+  analysis,
 }: {
   event: HistoryEvent
   areaName: string
@@ -497,6 +592,8 @@ function SpotOverview({
   near: HistoryEvent[]
   onSelectEvent: (id: string) => void
   onCompare: () => void
+  /** The radar overview for this kind of event. */
+  analysis: React.ReactNode
 }) {
   const cycles = spot.radar.data?.movement?.cycles ?? []
   const firstPass = cycles.at(-1)?.start
@@ -508,11 +605,12 @@ function SpotOverview({
     ? [...cycles].reverse().find((c) => c.start.slice(0, 10) >= date)
     : undefined
 
+  // Order: the facts, the radar overview, what happened, impacts, radar
+  // passes, then other records nearby.
   return (
     <div className="grid grid-cols-[minmax(0,1fr)] gap-4">
       <dl className="grid grid-cols-2 gap-x-3 gap-y-2.5 rounded-xl border p-3 text-xs">
         <Field label="Date" value={formatEventDate(event.date)} />
-        <Field label="Type" value={HAZARD_LABEL[event.type]} />
         <Field
           label="Where"
           value={
@@ -523,10 +621,12 @@ function SpotOverview({
                 : areaName
           }
         />
-        <Field
-          label="Coordinates"
-          value={`${event.latitude.toFixed(4)}, ${event.longitude.toFixed(4)}`}
-        />
+        <div className="col-span-2">
+          <Field
+            label="Coordinates"
+            value={`${event.latitude.toFixed(4)}, ${event.longitude.toFixed(4)}`}
+          />
+        </div>
         {event.detail && (
           <div className="col-span-2">
             <Field label="Detail" value={event.detail} />
@@ -548,6 +648,8 @@ function SpotOverview({
         )}
       </dl>
 
+      {analysis}
+
       {event.description && (
         <div className="grid gap-1 text-xs leading-relaxed">
           <p className="text-sm font-semibold">What happened</p>
@@ -558,7 +660,7 @@ function SpotOverview({
         <Impacts impacts={event.impacts} />
       )}
 
-      <div className="grid gap-2 rounded-xl bg-muted/60 p-3 text-xs">
+      <div className="grid gap-1.5 text-xs">
         <p className="text-sm font-semibold">NISAR radar here</p>
         {spot.radar.loading ? (
           <Loading>Checking passes…</Loading>
@@ -614,4 +716,45 @@ function km(a: HistoryEvent, b: HistoryEvent) {
     (a.longitude - b.longitude) * Math.cos((a.latitude * Math.PI) / 180)
   const dy = a.latitude - b.latitude
   return Math.hypot(dx, dy) * 111
+}
+
+/** A small labelled dropdown (period, sort). */
+function Choice<T extends string>({
+  label,
+  icon,
+  value,
+  options,
+  onChange,
+  align = "start",
+}: {
+  label: string
+  icon: React.ReactNode
+  value: T
+  options: { id: T; label: string }[]
+  onChange: (value: T) => void
+  align?: "start" | "end"
+}) {
+  return (
+    <Select
+      value={value}
+      onValueChange={(v) => v && onChange(v as T)}
+      items={options.map((o) => ({ value: o.id, label: o.label }))}
+    >
+      <SelectTrigger
+        size="sm"
+        aria-label={label}
+        className="shrink-0 text-xs [&>svg:first-child]:size-3.5 [&>svg:first-child]:text-muted-foreground"
+      >
+        {icon}
+        <SelectValue />
+      </SelectTrigger>
+      <SelectContent align={align}>
+        {options.map((o) => (
+          <SelectItem key={o.id} value={o.id} className="text-xs">
+            {o.label}
+          </SelectItem>
+        ))}
+      </SelectContent>
+    </Select>
+  )
 }

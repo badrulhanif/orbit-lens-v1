@@ -117,7 +117,10 @@ function fetchPhoton(url: URL): Promise<PhotonFeature[]> {
     }
     try {
       return (
-        await fetchJson<{ features: PhotonFeature[] }>(url, { timeoutMs: 4000 })
+        await fetchJson<{ features: PhotonFeature[] }>(url, {
+          timeoutMs: 4000,
+          revalidate: 86400,
+        })
       ).features
     } catch (error) {
       photonDownUntil = Date.now() + 60_000
@@ -374,7 +377,10 @@ export async function nominatimSearch(
     )
   }
 
-  const data = await fetchJson<NominatimResult[]>(url, { timeoutMs: 8000 })
+  const data = await fetchJson<NominatimResult[]>(url, {
+    timeoutMs: 8000,
+    revalidate: 86400,
+  })
   return data
     .filter((r) => !isNoise(r.category, r.type))
     .map(nominatimToPlace)

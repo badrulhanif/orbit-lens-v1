@@ -11,6 +11,7 @@ import {
   type LatLng,
   type Place,
   type HazardIntent,
+  mergePlaces,
   type SearchResponse,
 } from "@/lib/geo"
 import { cn } from "@/lib/utils"
@@ -25,6 +26,8 @@ type PlaceSearchProps = {
   onPick: (place: Place) => void
   onHazard: (intent: HazardIntent) => void
   onClear: () => void
+  /** Extra buttons at the end of the search bar. */
+  actions?: React.ReactNode
   className?: string
 }
 
@@ -55,6 +58,7 @@ export function PlaceSearch({
   onPick,
   onHazard,
   onClear,
+  actions,
   className,
 }: PlaceSearchProps) {
   const listId = React.useId()
@@ -120,50 +124,79 @@ export function PlaceSearch({
     const bias = biasParams(getBias())
     const key = `${q.toLowerCase()}|${bias}`
     const hit = cache.current.get(key)
-    if (hit) {
+    if (hit && !submit) {
       setLoading(false)
       show(hit)
       return
     }
 
     const controller = new AbortController()
+    const { signal } = controller
     request.current = controller
+    const url = (extra: string) =>
+      `/api/search?q=${encodeURIComponent(q)}${bias}${extra}`
     setLoading(true)
-    fetch(
-      `/api/search?q=${encodeURIComponent(q)}${bias}${submit ? "&submit=1" : ""}`,
-      { signal: controller.signal }
-    )
+
+    // Enter means "go": one full search, then jump to the best match.
+    if (submit) {
+      fetch(url("&submit=1"), { signal })
+        .then(async (res) => {
+          const body = (await res.json()) as SearchResponse
+          const best = body.places?.[0]
+          if (!res.ok) throw new Error("Search failed.")
+          if (best && !body.intent) {
+            setData(body)
+            setOpen(false)
+            setValue(best.name)
+            onPick(best)
+          } else {
+            show(body)
+            if (body.intent) loadEvents(body.intent, key)
+          }
+        })
+        .catch(fail(signal))
+        .finally(() => !signal.aborted && setLoading(false))
+      return
+    }
+
+    // Typing: offline matches show at once; buildings and streets from the
+    // online search are merged in when they arrive.
+    fetch(url("&stage=local"), { signal })
       .then(async (res) => {
-        const body = await res.json()
-        if (body?.needsSubmit) {
-          setNeedsSubmit(true)
-          show({ intent: body.intent ?? null, places: [] })
+        if (!res.ok) throw new Error("Search failed.")
+        const local = (await res.json()) as SearchResponse
+        if (local.intent) {
+          cache.current.set(key, local)
+          show(local)
+          setLoading(false)
+          loadEvents(local.intent, key)
           return
         }
-        if (!res.ok) throw new Error(body?.error ?? "Search failed.")
-        const response = body as SearchResponse
-        cache.current.set(key, response)
-        // Enter means "go": jump to the best match right away.
-        const best = response.places[0]
-        if (submit && best && !response.intent) {
-          setData(response)
-          setOpen(false)
-          setValue(best.name)
-          onPick(best)
-          return
+        show(local)
+        const n = local.strong ?? local.places.length
+        const strong = local.places.slice(0, n)
+        const weak = local.places.slice(n)
+        const online = await fetch(url("&stage=online"), { signal })
+        const spots = online.ok
+          ? ((await online.json()) as SearchResponse).places
+          : []
+        const merged = {
+          intent: null,
+          places: mergePlaces(strong, spots, weak),
         }
-        setNeedsSubmit(false)
-        show(response)
-        if (response.intent) loadEvents(response.intent, key)
+        if (online.ok) cache.current.set(key, merged)
+        // The online search being down only matters if nothing matched.
+        setNeedsSubmit(!online.ok && !merged.places.length)
+        setData(merged)
       })
-      .catch((err: unknown) => {
-        if (controller.signal.aborted) return
-        setError(err instanceof Error ? err.message : "Search failed.")
-        setOpen(true)
-      })
-      .finally(() => {
-        if (!controller.signal.aborted) setLoading(false)
-      })
+      .catch(fail(signal))
+      .finally(() => !signal.aborted && setLoading(false))
+  }
+
+  const fail = (signal: AbortSignal) => (err: unknown) => {
+    if (signal.aborted) return
+    setError(err instanceof Error ? err.message : "Search failed.")
+    setOpen(true)
   }
 
   function onChange(next: string) {
@@ -256,9 +289,12 @@ export function PlaceSearch({
           autoComplete="off"
           spellCheck={false}
           enterKeyHint="search"
-          className="h-10 w-full min-w-0 bg-transparent pr-10 pl-9 text-base outline-none placeholder:text-muted-foreground md:text-sm"
+          className={cn(
+            "h-10 w-full min-w-0 bg-transparent pl-9 text-base outline-none placeholder:text-muted-foreground md:text-sm",
+            actions ? "pr-20" : "pr-10"
+          )}
         />
-        <div className="absolute right-2.5 flex items-center">
+        <div className="absolute right-1.5 flex items-center gap-0.5">
           {loading ? (
             <LoaderCircleIcon className="mr-1.5 size-4 animate-spin text-muted-foreground" />
           ) : value ? (
@@ -272,6 +308,7 @@ export function PlaceSearch({
               <XIcon />
             </Button>
           ) : null}
+          {actions}
         </div>
       </div>
 
@@ -282,7 +319,7 @@ export function PlaceSearch({
           aria-label="Suggestions"
           // Keep focus in the input while clicking an option.
           onMouseDown={(event) => event.preventDefault()}
-          className="flex max-h-[50svh] flex-col overflow-y-auto border-t p-1.5"
+          className="flex max-h-[50svh] flex-col overflow-x-hidden overflow-y-auto border-t p-1.5"
         >
           {eventsLoading && data?.intent && !data.places.length && (
             <p className="order-last flex items-center gap-2 px-2.5 py-2 text-xs text-muted-foreground">
@@ -301,7 +338,9 @@ export function PlaceSearch({
             <p className="px-2.5 py-2 text-sm text-destructive">{error}</p>
           ) : needsSubmit && rows.length === 0 ? null : rows.length === 0 ? (
             <p className="px-2.5 py-2 text-sm text-muted-foreground">
-              No matches. Try adding a city or state.
+              {loading
+                ? "Searching buildings and streets…"
+                : "No matches. Try adding a city or state."}
             </p>
           ) : (
             rows.map((row, i) => (

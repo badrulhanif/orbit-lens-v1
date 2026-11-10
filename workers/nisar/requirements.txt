@@ -1,0 +1,7 @@
+h5py>=3.12
+numpy>=2.0
+fsspec>=2024.6
+aiohttp>=3.9
+requests>=2.32
+pyproj>=3.6
+pillow>=10.0

@@ -13,12 +13,20 @@
     "postinstall": "node scripts/copy-maplibre-worker.mjs",
     "data:gazetteer": "node scripts/build-gazetteer.mjs && node scripts/enrich-bboxes.mjs",
     "data:boundaries": "node scripts/fetch-boundaries.mjs",
-    "data:land": "node scripts/build-land.mjs"
+    "data:land": "node scripts/build-land.mjs",
+    "data:gdacs": "node scripts/fetch-gdacs.mjs",
+    "nisar": "cd workers/nisar && .venv/bin/python server.py",
+    "nisar:setup": "python3 -m venv workers/nisar/.venv && workers/nisar/.venv/bin/python -m pip install -r workers/nisar/requirements.txt",
+    "test": "playwright test",
+    "test:unit": "playwright test --project=unit",
+    "test:e2e": "playwright test --project=e2e",
+    "test:setup": "playwright install chromium"
   },
   "dependencies": {
     "@base-ui/react": "^1.9.0",
     "class-variance-authority": "^0.7.1",
     "cn": "^0.5.2",
+    "flatbush": "^4.7.0",
     "lucide-react": "^1.70.0",
     "maplibre-gl": "^6.17.0",
     "next": "16.4.4",
@@ -30,6 +38,7 @@
     "tw-animate-css": "^1.4.0"
   },
   "devDependencies": {
+    "@playwright/test": "^1.65.0",
     "@tailwindcss/postcss": "^4",
     "@types/geojson": "^7946.0.16",
     "@types/node": "^20",

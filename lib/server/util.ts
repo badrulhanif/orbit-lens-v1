@@ -42,17 +42,27 @@ export class TtlCache<T> {
   }
 }
 
-/** fetch + JSON with a timeout; throws on HTTP errors. */
+/**
+ * fetch + JSON with a timeout; throws on HTTP errors. `revalidate` (seconds)
+ * keeps the answer in Next's shared data cache, which survives restarts and
+ * is shared between server instances.
+ */
 export async function fetchJson<T>(
   url: string | URL,
   {
     timeoutMs = 10_000,
     headers,
-  }: { timeoutMs?: number; headers?: Record<string, string> } = {}
+    revalidate,
+  }: {
+    timeoutMs?: number
+    headers?: Record<string, string>
+    revalidate?: number
+  } = {}
 ): Promise<T> {
   const res = await fetch(url, {
     headers: { "User-Agent": USER_AGENT, ...headers },
     signal: AbortSignal.timeout(timeoutMs),
+    ...(revalidate ? { next: { revalidate } } : { cache: "no-store" }),
   })
   if (!res.ok) throw new Error(`${new URL(url).host} responded ${res.status}`)
   return (await res.json()) as T

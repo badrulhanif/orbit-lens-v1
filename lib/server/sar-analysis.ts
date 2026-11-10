@@ -2,8 +2,34 @@ import sharp from "sharp"
 
 import type { Bbox } from "@/lib/area"
 import { rasterMask, type Rings } from "@/lib/server/boundaries"
+import { landRingsIn } from "@/lib/server/land"
 import { cropMovementNative, cropSignal } from "@/lib/server/sar-crop"
 import { TtlCache } from "@/lib/server/util"
+
+/**
+ * Pixels to count: inside the area's outline (when given) and on land.
+ * State outlines include coastal waters; without the land mask, sea and
+ * tides would count as "water extent" and "new water".
+ */
+async function areaMask(
+  rings: Rings | null,
+  bbox: Bbox,
+  width: number,
+  height: number
+) {
+  const land = await landRingsIn(bbox)
+  // Each outline filled on its own (islands can overlap the main land).
+  let onLand: Uint8Array | null = null
+  for (const ring of land ?? []) {
+    const m = rasterMask([ring], bbox, width, height)
+    if (!onLand) onLand = m
+    else for (let p = 0; p < m.length; p++) onLand[p] |= m[p]
+  }
+  const inArea = rings ? rasterMask(rings, bbox, width, height) : null
+  if (!inArea) return onLand
+  if (onLand) for (let p = 0; p < inArea.length; p++) inArea[p] &= onLand[p]
+  return inArea
+}
 
 /**
  * Analysis of NISAR preview images for one area. These are estimates from
@@ -118,7 +144,7 @@ async function signalChange(
   ])
   const total = A.width * A.height
   const pxKm2 = areaKm2(bbox) / total
-  const mask = rings ? rasterMask(rings, bbox, A.width, A.height) : null
+  const mask = await areaMask(rings, bbox, A.width, A.height)
   const a = [0, 0, 0, 0]
   const b = [0, 0, 0, 0]
   let common = 0
@@ -199,7 +225,7 @@ export async function signalCover(
   rings: Rings | null = null
 ): Promise<CoverStats> {
   const img = await raw(await cropSignal(date, bbox))
-  const mask = rings ? rasterMask(rings, bbox, img.width, img.height) : null
+  const mask = await areaMask(rings, bbox, img.width, img.height)
   const inside = mask ? mask.reduce((t, v) => t + v, 0) : img.width * img.height
   const n = [0, 0, 0, 0]
   let valid = 0
@@ -320,7 +346,7 @@ async function movementChange(
   const db = decorrelated(B)
   const total = A.width * A.height
   const pxKm2 = areaKm2(bbox) / total
-  const mask = rings ? rasterMask(rings, bbox, A.width, A.height) : null
+  const mask = await areaMask(rings, bbox, A.width, A.height)
   if (water) {
     // Count land only.
     for (let p = 0; p < total; p++) if (water[p] && mask) mask[p] = 0
@@ -375,7 +401,7 @@ export async function movementCoherence(
 ) {
   const img = await raw(await cropMovementNative(granule, bbox))
   const d = decorrelated(img)
-  const mask = rings ? rasterMask(rings, bbox, img.width, img.height) : null
+  const mask = await areaMask(rings, bbox, img.width, img.height)
   const inside = mask ? mask.reduce((t, v) => t + v, 0) : d.length
   let valid = 0
   let coherent = 0

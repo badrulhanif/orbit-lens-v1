@@ -96,32 +96,6 @@ export function Field({ label, value }: { label: string; value: string }) {
   )
 }
 
-export function Chip({
-  on,
-  onClick,
-  children,
-}: {
-  on: boolean
-  onClick: () => void
-  children: React.ReactNode
-}) {
-  return (
-    <button
-      type="button"
-      aria-pressed={on}
-      onClick={onClick}
-      className={cn(
-        "inline-flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs transition-colors",
-        on
-          ? "border-foreground bg-foreground text-background"
-          : "hover:bg-muted"
-      )}
-    >
-      {children}
-    </button>
-  )
-}
-
 export function Loading({
   children,
   small,

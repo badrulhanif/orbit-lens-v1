@@ -33,12 +33,27 @@ type GdacsResponse = {
   }
 }
 
-// Events don't change much once over; don't keep failed lookups.
+// Events don't change much once over; failed lookups are retried later.
 const cache = new TtlCache<GdacsEvent | null>(
   2000,
   6 * 60 * 60_000,
   (v) => v !== null
 )
+
+// GDACS is slow (2–40 s an event), so finished events come from a snapshot
+// (data/gdacs.json, `npm run data:gdacs`); only newer ones are fetched.
+// (null = removed from GDACS.)
+type Snapshot = Record<string, GdacsResponse | null>
+let snapshot: Promise<Snapshot> | null = null
+const loadSnapshot = () =>
+  (snapshot ??= import("@/data/gdacs.json")
+    .then((m) => (m.default ?? m) as unknown as Snapshot)
+    .catch(() => ({}) as Snapshot))
+
+// A lookup that just failed isn't tried again for a while, so one slow
+// event can't hold up every request.
+const failedAt = new Map<string, number>()
+const RETRY_AFTER = 10 * 60_000
 
 export function gdacsEventId(url: string | null | undefined) {
   return url?.match(/eventid=(\d+)/)?.[1] ?? null
@@ -46,28 +61,42 @@ export function gdacsEventId(url: string | null | undefined) {
 
 export function gdacsEvent(eventId: string) {
   return cache.get(eventId, async () => {
+    const saved = await loadSnapshot()
+    if (eventId in saved) {
+      const d = saved[eventId]
+      return d ? parse(d) : null
+    }
+    if (Date.now() - (failedAt.get(eventId) ?? 0) < RETRY_AFTER) return null
     try {
-      const d = await fetchJson<GdacsResponse>(
-        `https://www.gdacs.org/gdacsapi/api/events/geteventdata?eventtype=FL&eventid=${eventId}`,
-        { timeoutMs: 8000 }
+      return parse(
+        await fetchJson<GdacsResponse>(
+          `https://www.gdacs.org/gdacsapi/api/events/geteventdata?eventtype=FL&eventid=${eventId}`,
+          { timeoutMs: 6000, revalidate: 6 * 3600 }
+        )
       )
-      const c = d.geometry?.type === "Point" ? d.geometry.coordinates : null
-      if (!c || !c.every(Number.isFinite)) return null
-      const p = d.properties ?? {}
-      return {
-        longitude: c[0],
-        latitude: c[1],
-        countries: (p.affectedcountries ?? []).map((x) => x.countryname),
-        approximate: Number.isInteger(c[0]) && Number.isInteger(c[1]),
-        from: p.fromdate?.slice(0, 10) ?? null,
-        to: p.todate?.slice(0, 10) ?? null,
-        alert: p.alertlevel ?? null,
-        impacts: impactsOf(p.sendai ?? []),
-      }
-    } catch {
+    } catch (error) {
+      // A 404 means GDACS removed the event: don't ask again.
+      const gone = error instanceof Error && error.message.endsWith(" 404")
+      failedAt.set(eventId, gone ? Infinity : Date.now())
       return null
     }
   })
+}
+
+function parse(d: GdacsResponse): GdacsEvent | null {
+  const c = d.geometry?.type === "Point" ? d.geometry.coordinates : null
+  if (!c || !c.every(Number.isFinite)) return null
+  const p = d.properties ?? {}
+  return {
+    longitude: c[0],
+    latitude: c[1],
+    countries: (p.affectedcountries ?? []).map((x) => x.countryname),
+    approximate: Number.isInteger(c[0]) && Number.isInteger(c[1]),
+    from: p.fromdate?.slice(0, 10) ?? null,
+    to: p.todate?.slice(0, 10) ?? null,
+    alert: p.alertlevel ?? null,
+    impacts: impactsOf(p.sendai ?? []),
+  }
 }
 
 /**

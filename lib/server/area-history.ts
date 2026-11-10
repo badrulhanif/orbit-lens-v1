@@ -1,5 +1,9 @@
 import { inRings, ringsFor } from "@/lib/server/boundaries"
-import { describeQuake, impactSentence } from "@/lib/server/describe"
+import {
+  describeQuake,
+  impactSentence,
+  quakeTitle,
+} from "@/lib/server/describe"
 import { EONET_CATEGORIES, eonetRecords, refine } from "@/lib/server/eonet"
 import { isOffshore } from "@/lib/server/land"
 import { reliefCentres, warningsFor } from "@/lib/server/local-reports"
@@ -38,7 +42,8 @@ const WIKIDATA_TYPES: Record<string, HazardType> = {
   Q8070: "tsunami",
   Q81054: "storm",
   Q169950: "wildfire",
-  Q8072: "volcano",
+  // Eruptions (not "volcano", which lists the mountains themselves).
+  Q7692360: "volcano",
   // Generic "natural disaster" / "disaster": typed from the name below.
   Q8065: "disaster",
   Q3839081: "disaster",
@@ -82,6 +87,7 @@ SELECT ?item ?itemLabel ?itemDescription ?type ?date ?start ?coord ?article ?loc
   const rows = (
     await fetchJson<{ results: { bindings: SparqlRow[] } }>(url, {
       timeoutMs: 20_000,
+      revalidate: 86400,
       headers: { Accept: "application/sparql-results+json" },
     })
   ).results.bindings
@@ -179,7 +185,7 @@ async function refineFromWikipedia(events: HistoryEvent[]) {
           { title: string; coordinates?: { lat: number; lon: number }[] }
         >
       }
-    }>(url, { timeoutMs: 8000 })
+    }>(url, { timeoutMs: 8000, revalidate: 86400 })
     for (const page of Object.values(data.query?.pages ?? {})) {
       const precise = page.coordinates?.find((c) => !isRough(c.lat, c.lon))
       if (!precise) continue
@@ -221,13 +227,14 @@ async function fromUsgs([w, s, e, n]: Bbox): Promise<HistoryEvent[]> {
     "&starttime=1970-01-01&minmagnitude=3.5&orderby=magnitude&limit=100"
   const { features } = await fetchJson<{ features: UsgsFeature[] }>(url, {
     timeoutMs: 15_000,
+    revalidate: 10800,
   })
   return features.map((f) => {
     const [longitude, latitude, depth] = f.geometry.coordinates
     return {
       id: `usgs-${f.id}`,
       type: "earthquake",
-      title: `M${f.properties.mag.toFixed(1)} earthquake`,
+      title: quakeTitle(f.properties.mag, f.properties.place),
       date: new Date(f.properties.time).toISOString().slice(0, 10),
       detail: [
         f.properties.place,
@@ -379,11 +386,15 @@ export async function areaHistory(
         }
         continue
       }
+      // Named after where it was reported here; its map point (and the
+      // original title) belongs to another place.
+      const places = [...new Set(here.map((i) => i.region))]
       out.push({
         ...f,
+        title: `Flood in ${places.slice(0, 2).join(" and ")}${places.length > 2 ? ` +${places.length - 2}` : ""}`,
         scope: "reported",
         outline: null,
-        detail: `Reported here: ${impactSentence(here, 3)}`,
+        detail: `Reported here: ${impactSentence(here, 3)} · part of a wider flood`,
       })
     }
   }

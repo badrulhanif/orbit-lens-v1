@@ -1,24 +1,19 @@
 "use client"
 
 import * as React from "react"
+import dynamic from "next/dynamic"
 import { useTheme } from "next-themes"
 
-import { ChangeLegend, type AnalysisOverlay } from "@/components/analysis-card"
-import { AreaPanel } from "@/components/area-panel"
+import type { AnalysisOverlay } from "@/components/analysis-card"
 import { CaseStudies } from "@/components/case-studies"
-import {
-  DataInfoContext,
-  DataSourcesDialog,
-} from "@/components/data-sources-dialog"
-import { LocationConsentDialog } from "@/components/location-consent-dialog"
+import { DataInfoContext } from "@/components/data-info"
 import {
   MapCanvas,
   type FocusRequest,
   type MapViewport,
 } from "@/components/map-canvas"
-import { CompareMap } from "@/components/compare-map"
 import { MapControls } from "@/components/map-controls"
-import { NearbyCard } from "@/components/nearby-card"
+import { NearbyButton, NearbyProblem } from "@/components/nearby-card"
 import { PlaceSearch, type SearchBias } from "@/components/place-search"
 import { SarLegend } from "@/components/sar-legend"
 import { SarPassNav } from "@/components/sar-pass-nav"
@@ -26,11 +21,32 @@ import { useArea } from "@/hooks/use-area"
 import { useDeviceLocation } from "@/hooks/use-device-location"
 import { useMapView } from "@/hooks/use-map-view"
 import { useNisar } from "@/hooks/use-nisar"
-import { appById, type AppId } from "@/lib/apps"
+import { appById, inFilter, type AppId, type HazardFilter } from "@/lib/apps"
 import { cn } from "@/lib/utils"
+import { inPeriod, type Period } from "@/lib/area"
+import { fromSearch, toSearch } from "@/lib/share"
 import type { HazardIntent, LatLng, Place } from "@/lib/geo"
 import type { SarCycle } from "@/lib/sar"
 import type { Map as MapLibreMap } from "maplibre-gl"
+
+// Loaded when first needed, to keep the first page load small.
+const AreaPanel = dynamic(() =>
+  import("@/components/area-panel").then((m) => m.AreaPanel)
+)
+const CompareMap = dynamic(() =>
+  import("@/components/compare-map").then((m) => m.CompareMap)
+)
+const ChangeLegend = dynamic(() =>
+  import("@/components/analysis-card").then((m) => m.ChangeLegend)
+)
+const DataSourcesDialog = dynamic(() =>
+  import("@/components/data-sources-dialog").then((m) => m.DataSourcesDialog)
+)
+const LocationConsentDialog = dynamic(() =>
+  import("@/components/location-consent-dialog").then(
+    (m) => m.LocationConsentDialog
+  )
+)
 
 // Record the visit (IP goes to the server log only) once per page load.
 let visitLogged = false
@@ -104,6 +120,8 @@ export function OrbitLens() {
 
   function pick(place: Place) {
     setSelectedEventId(null)
+    setFilter("all")
+    setNearby((n) => (n.tried ? { ...n, tried: false } : n))
     setPicked(place)
     focusOn("picked")
     // A hazard event: show its radar layer, on the pass nearest the event.
@@ -115,25 +133,29 @@ export function OrbitLens() {
   const [nearby, setNearby] = React.useState({
     busy: false,
     error: null as string | null,
+    /** Asked for since the last pick (so problems show only then). */
+    tried: false,
   })
   async function openNearby(p: LatLng) {
-    setNearby({ busy: true, error: null })
+    setNearby({ busy: true, error: null, tried: true })
     try {
       const res = await fetch(
         `/api/nearby?lat=${p.latitude.toFixed(2)}&lon=${p.longitude.toFixed(2)}`
       )
       const { place } = (await res.json()) as { place: Place | null }
       if (!res.ok || !place) throw new Error()
-      setNearby({ busy: false, error: null })
       pick(place)
+      setNearby({ busy: false, error: null, tried: false })
     } catch {
       setNearby({
         busy: false,
         error: "Couldn't find your district. Try again.",
+        tried: true,
       })
     }
   }
   async function nearMe() {
+    setNearby((n) => ({ ...n, error: null, tried: true }))
     if (location.position) return openNearby(location.position)
     if (!location.allowed) return setAskLocation(true)
     const p = await location.locate()
@@ -179,8 +201,12 @@ export function OrbitLens() {
   // Application (flood, forest…) and its change-map overlay.
   const [app, setApp] = React.useState<AppId>("flood")
   const [analysis, setAnalysis] = React.useState<AnalysisOverlay | null>(null)
+  // Picking an application also filters the list and map to its hazards.
+  const [filter, setFilter] = React.useState<HazardFilter>("all")
+  const [period, setPeriod] = React.useState<Period>("all")
   function chooseApp(next: AppId) {
     setApp(next)
+    setFilter(next)
     setAnalysis(null)
     // Show the radar layer that suits it (top right still toggles it).
     nisar.setLayer(appById(next).layer)
@@ -197,6 +223,10 @@ export function OrbitLens() {
     onFocus: (bbox: [number, number, number, number]) => focusOn("area", bbox),
     app,
     onAppChange: chooseApp,
+    filter,
+    onFilterChange: setFilter,
+    period,
+    onPeriodChange: setPeriod,
     overlay: analysis,
     onOverlay: showAnalysis,
   }
@@ -257,12 +287,51 @@ export function OrbitLens() {
     setSearchKey((k) => k + 1)
   }
 
+  // Shareable link: open the view in the URL once, then keep the URL in
+  // step with what's on screen (place, filter, period, event).
+  const restored = React.useRef(false)
+  const pendingEvent = React.useRef<string | null>(null)
+  React.useEffect(() => {
+    if (restored.current) return
+    restored.current = true
+    const view = fromSearch(window.location.search)
+    if (!view) return
+    pendingEvent.current = view.event
+    Promise.resolve().then(() => {
+      pick(view.place)
+      if (view.filter !== "all") chooseApp(view.filter)
+      setPeriod(view.period)
+    })
+    // Once, on load.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+  React.useEffect(() => {
+    const id = pendingEvent.current
+    if (!id || !events.some((e) => e.id === id)) return
+    pendingEvent.current = null
+    Promise.resolve().then(() => selectEvent(id))
+    // Only when the history arrives.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [events])
+  React.useEffect(() => {
+    if (!restored.current) return
+    const search = toSearch(
+      picked ? { place: picked, filter, period, event: selectedEventId } : null
+    )
+    if (search !== window.location.search)
+      window.history.replaceState(null, "", search || window.location.pathname)
+  }, [picked, filter, period, selectedEventId])
+
   return (
     <DataInfoContext.Provider value={openDataInfo}>
       <main className="relative h-svh w-full overflow-hidden bg-background">
         <MapCanvas
           picked={picked}
-          events={events}
+          events={events.filter(
+            (e) =>
+              e.id === selectedEventId ||
+              (!e.live && inFilter(e.type, filter) && inPeriod(e.date, period))
+          )}
           selectedEventId={selectedEventId}
           onSelectEvent={selectEvent}
           hoveredEventId={hoveredEventId}
@@ -310,7 +379,22 @@ export function OrbitLens() {
               onPick={pick}
               onHazard={showHazard}
               onClear={closeArea}
+              actions={
+                <NearbyButton
+                  busy={nearby.busy || location.status === "locating"}
+                  active={picked?.id.startsWith("near-") ?? false}
+                  onClick={nearMe}
+                />
+              }
             />
+            {nearby.tried && (
+              <NearbyProblem
+                className="shrink-0"
+                location={location}
+                error={nearby.error}
+                onRetry={nearMe}
+              />
+            )}
             {picked ? (
               <AreaPanel
                 key={picked.id}
@@ -325,15 +409,8 @@ export function OrbitLens() {
               />
             ) : (
               <>
-                <NearbyCard
-                  className="shrink-0"
-                  location={location}
-                  busy={nearby.busy}
-                  error={nearby.error}
-                  onNearby={nearMe}
-                />
                 <CaseStudies
-                  className="min-h-0 overflow-y-auto max-sm:hidden"
+                  className="min-h-0 overflow-x-hidden overflow-y-auto max-sm:hidden"
                   onOpen={(place, nextApp) => {
                     pick(place)
                     chooseApp(nextApp)
@@ -391,15 +468,17 @@ export function OrbitLens() {
           </div>
         </div>
 
-        <LocationConsentDialog
-          open={askLocation}
-          onAllow={allowLocation}
-          onDeny={() => {
-            setAskLocation(false)
-            location.decline()
-          }}
-        />
-        <DataSourcesDialog open={dataInfo} onOpenChange={setDataInfo} />
+        {askLocation && (
+          <LocationConsentDialog
+            open
+            onAllow={allowLocation}
+            onDeny={() => {
+              setAskLocation(false)
+              location.decline()
+            }}
+          />
+        )}
+        {dataInfo && <DataSourcesDialog open onOpenChange={setDataInfo} />}
       </main>
     </DataInfoContext.Provider>
   )

@@ -40,3 +40,7 @@ next-env.d.ts
 
 # copied from node_modules on install (scripts/copy-maplibre-worker.mjs)
 /public/maplibre-gl-worker.mjs
+
+# tests
+/test-results/
+/playwright-report/

@@ -55,6 +55,7 @@ export function eonetRecords(
   return feed.get(url, async () => {
     const { events } = await fetchJson<{ events: EonetEvent[] }>(url, {
       timeoutMs: 15_000,
+      revalidate: 1800,
     })
     return events.flatMap((ev) => {
       const record = parse(ev)

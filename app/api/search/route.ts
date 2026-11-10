@@ -1,8 +1,8 @@
 import type { NextRequest } from "next/server"
 
 import {
-  distanceMeters,
   isArea,
+  mergePlaces,
   type HazardIntent,
   type Place,
   type SearchResponse,
@@ -17,27 +17,42 @@ import {
 import { detectHazard } from "@/lib/server/hazards"
 
 /**
- * Search box backend.
- *
- * Places: an offline gazetteer answers instantly and ranks the way people
- * expect (country → state → district → town → kampung, nearest first among
- * equals). Photon adds buildings, malls and streets when it's reachable.
- *
- * Hazards ("flood", "banjir kelantan"): returns which NISAR layer shows it;
- * the client then loads recent real events from /api/hazards.
- *
- * `submit=1` marks an explicit Enter: if nothing is found locally and Photon
- * is down, we ask Nominatim (which only allows searches like that).
+ * Search box backend, in two stages so typing never waits on the network:
+ *  - stage=local: hazards ("flood", "banjir kelantan") and the offline
+ *    gazetteer, ranked country → state → district → town → kampung, nearest
+ *    first among equals. Answers in milliseconds.
+ *  - stage=online: buildings, malls and streets from Photon (1–2 s). The
+ *    client merges them in when they arrive.
+ * With no stage (an explicit Enter, `submit=1`) both run, and if nothing is
+ * found and Photon is down we ask Nominatim (which only allows searches
+ * like that).
  */
 export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams
   const q = params.get("q")?.trim().slice(0, 200) ?? ""
+  const stage = params.get("stage")
   const submit = params.get("submit") === "1"
-  if (q.length < 2) {
-    return Response.json({ intent: null, places: [] } satisfies SearchResponse)
-  }
+  if (q.length < 2) return ok({ intent: null, places: [] })
 
   const centre = await resolveCentre(params, request.headers)
+
+  if (stage === "online") {
+    try {
+      const places = (await photonSearch(q, centre, 6)).filter(
+        (p) => !isArea(p)
+      )
+      return ok({ intent: null, places })
+    } catch (error) {
+      return Response.json(
+        {
+          intent: null,
+          places: [],
+          down: error instanceof PhotonUnavailableError,
+        },
+        { status: 503 }
+      )
+    }
+  }
 
   const match = detectHazard(q)
   if (match) {
@@ -62,51 +77,33 @@ export async function GET(request: NextRequest) {
   }
 
   const local = await searchGazetteer(q, centre, 8)
-  const strong = local.filter((p) => p.match < 2)
-  const weak = local.filter((p) => p.match === 2)
+  const strong = local.filter((p) => p.match < 2).map(strip)
+  // Loose matches: a later word, or a name with a typo.
+  const weak = local.filter((p) => p.match >= 2).map(strip)
+  if (stage === "local") {
+    return ok({
+      intent: null,
+      places: [...strong, ...weak],
+      strong: strong.length,
+    })
+  }
 
-  // Buildings, malls, streets… from Photon (skipped instantly while down).
-  let pois: Place[] = []
-  let photonDown = false
+  let spots: Place[] = []
   try {
-    pois = (await photonSearch(q, centre, 6)).filter((p) => !isArea(p))
+    spots = (await photonSearch(q, centre, 6)).filter((p) => !isArea(p))
   } catch (error) {
-    photonDown = error instanceof PhotonUnavailableError
+    if (error instanceof PhotonUnavailableError && submit && !strong.length)
+      spots = await nominatimSearch(q, centre, 6).catch(() => [])
   }
-  if (photonDown && submit && strong.length === 0) {
-    pois = await nominatimSearch(q, centre, 6).catch(() => [])
-  }
+  return ok({ intent: null, places: mergePlaces(strong, spots, weak) })
+}
 
-  // Names that match well first, then specific spots, then loose matches.
-  const merged: Place[] = []
-  for (const p of [...strong, ...pois, ...weak]) {
-    const dupe = merged.some(
-      (m) =>
-        m.name.toLowerCase() === p.name.toLowerCase() &&
-        distanceMeters(m, p) < 2_000
-    )
-    if (!dupe) merged.push(p)
-    if (merged.length >= 8) break
-  }
-
-  if (merged.length === 0 && photonDown && !submit) {
-    // Not in the offline index; the online search needs an explicit Enter.
-    return Response.json(
-      { intent: null, places: [], needsSubmit: true },
-      { status: 503 }
-    )
-  }
-
-  return ok({
-    intent: null,
-    // Strip internal ranking fields.
-    places: merged.map((p) => {
-      const place = { ...p } as Place & { match?: number; rank?: number }
-      delete place.match
-      delete place.rank
-      return place
-    }),
-  })
+/** Drop the gazetteer's internal ranking fields. */
+function strip(p: Place & { match?: number; rank?: number }): Place {
+  const place = { ...p }
+  delete place.match
+  delete place.rank
+  return place
 }
 
 function ok(body: SearchResponse) {

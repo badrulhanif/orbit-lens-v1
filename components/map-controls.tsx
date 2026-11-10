@@ -9,7 +9,7 @@ import {
   SatelliteIcon,
 } from "lucide-react"
 
-import { DataInfoButton } from "@/components/data-sources-dialog"
+import { DataInfoButton } from "@/components/data-info"
 import { MAP_VIEWS, type MapView } from "@/lib/map-styles"
 import type { SarLayer } from "@/lib/sar"
 import { cn } from "@/lib/utils"

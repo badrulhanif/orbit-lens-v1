@@ -101,3 +101,12 @@ export function describeQuake(p: {
     lines.push("Flagged for tsunami potential (not a confirmed tsunami).")
   return lines.join(" ")
 }
+
+/** "M5.0 earthquake near Semporna" from USGS's "43 km NNE of Semporna, Malaysia". */
+export function quakeTitle(mag: number, place: string | null | undefined) {
+  const near = place
+    ?.replace(/^.*\bof\s+/, "")
+    .split(",")[0]
+    .trim()
+  return `M${mag.toFixed(1)} earthquake${near ? ` near ${near}` : ""}`
+}

@@ -64,7 +64,7 @@ export function reliefCentres(): Promise<ReliefCentre[]> {
   return centres.get("all", async () => {
     const { points } = await fetchJson<{ points: JkmCentre[] | null }>(
       "https://infobencanajkmv2.jkm.gov.my/api/pusat-buka.php?a=0&b=0",
-      { timeoutMs: 8000 }
+      { timeoutMs: 8000, revalidate: 300 }
     )
     const today = new Date().toLocaleDateString("en-CA", {
       timeZone: "Asia/Kuala_Lumpur",
@@ -123,6 +123,7 @@ function allWarnings() {
   return warnings.get("all", () =>
     fetchJson<MetWarning[]>("https://api.data.gov.my/weather/warning/", {
       timeoutMs: 8000,
+      revalidate: 600,
     })
   )
 }

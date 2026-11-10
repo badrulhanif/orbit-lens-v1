@@ -184,14 +184,6 @@ export function precisionOf(e: HistoryEvent): {
   }
 }
 
-/** What each history source covers, for data-quality notes. */
-export const SOURCE_COVERAGE = [
-  "Earthquakes: USGS, magnitude 3.5+, since 1970",
-  "Floods: GDACS reports from 2025; major floods from Wikipedia since 1971 (state-wide)",
-  "Landslides and other events: named on Wikipedia / Wikidata",
-  "Happening now: JKM relief centres open today; MetMalaysia warnings in force",
-]
-
 /** Query string for an area (+ its boundary, so results stay inside it). */
 export function areaQuery(bbox: Bbox, boundaryKey?: string | null) {
   const [w, s, e, n] = bbox.map((v) => v.toFixed(4))
@@ -199,4 +191,29 @@ export function areaQuery(bbox: Bbox, boundaryKey?: string | null) {
     `w=${w}&s=${s}&e=${e}&n=${n}` +
     (boundaryKey ? `&boundary=${encodeURIComponent(boundaryKey)}` : "")
   )
+}
+
+/** How far back the list, stats and map look. */
+export type Period = "all" | "1y" | "5y" | "10y"
+
+export const PERIODS: { id: Period; label: string }[] = [
+  { id: "all", label: "All time" },
+  { id: "1y", label: "Last 12 months" },
+  { id: "5y", label: "Last 5 years" },
+  { id: "10y", label: "Last 10 years" },
+]
+
+const YEARS: Record<Exclude<Period, "all">, number> = {
+  "1y": 1,
+  "5y": 5,
+  "10y": 10,
+}
+
+export function inPeriod(date: string | null, period: Period) {
+  if (period === "all") return true
+  if (!date) return false
+  const cut = new Date()
+  cut.setFullYear(cut.getFullYear() - YEARS[period])
+  // ISO strings compare in date order ("2021-12" or "2021-12-16").
+  return date >= cut.toISOString().slice(0, date.length >= 10 ? 10 : 7)
 }

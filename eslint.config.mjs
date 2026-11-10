@@ -14,6 +14,8 @@ const eslintConfig = defineConfig([
     "next-env.d.ts",
     // Copied from node_modules by postinstall.
     "public/maplibre-gl-worker.mjs",
+    // The Python measurement service and its environment.
+    "workers/**",
   ]),
 ]);
 
