@@ -23,6 +23,6 @@ export async function GET(request: NextRequest) {
     boundary && boundary.length < 200 ? boundary : null
   )
   return Response.json(data, {
-    headers: { "Cache-Control": "private, max-age=1800" },
+    headers: { "Cache-Control": "private, max-age=300" },
   })
 }

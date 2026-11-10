@@ -35,6 +35,16 @@ const HAZARDS = [
   { id: "other", label: "Something else" },
 ]
 
+// Why "Here (GPS)" didn't work, and how to fix it.
+const GPS_HELP: Record<string, string> = {
+  blocked:
+    "Location is blocked for this site. Click the icon at the left of the address bar, set Location to Allow, then tap Here (GPS) again. For now the report uses this area.",
+  unavailable:
+    "Your device couldn't find its location. On a Mac: System Settings → Privacy & Security → Location Services → turn it on for your browser. For now the report uses this area.",
+  unsupported:
+    "This browser can't share its location; the report uses this area.",
+}
+
 const field =
   "w-full min-w-0 rounded-lg border bg-background px-2.5 py-2 text-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
 
@@ -73,9 +83,9 @@ function ReportDialog({
     latitude: number
     longitude: number
   } | null>(null)
-  const [gpsState, setGpsState] = React.useState<"idle" | "finding" | "error">(
-    "idle"
-  )
+  const [gpsState, setGpsState] = React.useState<
+    "idle" | "finding" | "blocked" | "unavailable" | "unsupported"
+  >("idle")
   const [photo, setPhoto] = React.useState<File | null>(null)
   const [state, setState] = React.useState<
     "idle" | "sending" | "sent" | string
@@ -84,18 +94,33 @@ function ReportDialog({
   function useGps() {
     setWhere("gps")
     if (gps) return
+    if (!("geolocation" in navigator)) return failGps("unsupported")
     setGpsState("finding")
+    const done = (p: GeolocationPosition) => {
+      setGps({ latitude: p.coords.latitude, longitude: p.coords.longitude })
+      setGpsState("idle")
+    }
+    // Phones answer with GPS; laptops (no GPS chip) often only answer the
+    // lower-accuracy request, from nearby Wi-Fi.
     navigator.geolocation.getCurrentPosition(
-      (p) => {
-        setGps({ latitude: p.coords.latitude, longitude: p.coords.longitude })
-        setGpsState("idle")
-      },
-      () => {
-        setGpsState("error")
-        setWhere("area")
-      },
-      { enableHighAccuracy: true, timeout: 15_000 }
+      done,
+      (err) =>
+        err.code === err.PERMISSION_DENIED
+          ? failGps("blocked")
+          : navigator.geolocation.getCurrentPosition(
+              done,
+              (e) =>
+                failGps(
+                  e.code === e.PERMISSION_DENIED ? "blocked" : "unavailable"
+                ),
+              { enableHighAccuracy: false, timeout: 15_000, maximumAge: 60_000 }
+            ),
+      { enableHighAccuracy: true, timeout: 8_000 }
     )
+  }
+  function failGps(why: "blocked" | "unavailable" | "unsupported") {
+    setGpsState(why)
+    setWhere("area")
   }
 
   async function submit(e: React.FormEvent) {
@@ -233,10 +258,8 @@ function ReportDialog({
                 </div>
               </div>
             </div>
-            {gpsState === "error" && (
-              <p className="text-xs text-destructive">
-                Couldn&apos;t get your location; the report will use this area.
-              </p>
+            {GPS_HELP[gpsState] && (
+              <p className="text-xs text-destructive">{GPS_HELP[gpsState]}</p>
             )}
             <label className="flex cursor-pointer items-center gap-2 rounded-lg border border-dashed px-3 py-2 text-xs text-muted-foreground hover:bg-muted/60">
               <CameraIcon className="size-4 shrink-0" />

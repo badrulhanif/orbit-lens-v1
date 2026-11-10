@@ -218,14 +218,12 @@ export function AlertsBell({
   )
 }
 
-/** "Email me" for one watched place: asks for an address, sends a confirm link. */
-function EmailAlerts({ link }: { link: string }) {
-  const [open, setOpen] = React.useState(false)
+/** Sign up for email alerts about one place (a confirm link is emailed). */
+function useEmailSignup(link: string) {
   const [email, setEmail] = React.useState("")
   const [state, setState] = React.useState<
     "idle" | "sending" | "sent" | string
   >("idle")
-
   async function submit(e: React.FormEvent) {
     e.preventDefault()
     setState("sending")
@@ -241,8 +239,17 @@ function EmailAlerts({ link }: { link: string }) {
       res?.ok ? "sent" : (body?.error ?? "Couldn't set up email alerts.")
     )
   }
+  return { email, setEmail, state, submit }
+}
 
-  if (state === "sent")
+const emailInput =
+  "h-8 min-w-0 flex-1 rounded-md border bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+
+/** In the bell's watch list: an envelope that opens the email form. */
+function EmailAlerts({ link }: { link: string }) {
+  const [open, setOpen] = React.useState(false)
+  const f = useEmailSignup(link)
+  if (f.state === "sent")
     return (
       <span className="shrink-0 text-emerald-700 dark:text-emerald-300">
         Check your email
@@ -262,35 +269,36 @@ function EmailAlerts({ link }: { link: string }) {
       </Tip>
     )
   return (
-    <form onSubmit={submit} className="flex min-w-0 shrink items-center gap-1">
+    <form
+      onSubmit={f.submit}
+      className="flex min-w-0 shrink items-center gap-1"
+    >
       <input
         type="email"
         required
         autoFocus
-        value={email}
-        onChange={(e) => setEmail(e.target.value)}
+        value={f.email}
+        onChange={(e) => f.setEmail(e.target.value)}
         placeholder="you@example.com"
         aria-label="Email address"
-        className="h-7 w-32 min-w-0 rounded-md border bg-background px-2 text-xs outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
+        className={cn(emailInput, "h-7 w-32 flex-none")}
       />
       <Button
         type="submit"
         size="sm"
         className="h-7"
-        disabled={state === "sending"}
+        disabled={f.state === "sending"}
       >
         Send
       </Button>
-      {state !== "idle" && state !== "sending" && (
-        <span className="sr-only" role="alert">
-          {state}
-        </span>
-      )}
     </form>
   )
 }
 
-/** Bell on a place's panel: watch it (or stop). */
+/**
+ * Bell on a place's panel. Tapping it watches the place and opens a small
+ * box: what watching means, an email field, and "Stop watching".
+ */
 export function WatchButton({
   place,
   history,
@@ -299,25 +307,103 @@ export function WatchButton({
   history: AreaHistory | null
 }) {
   const w = useWatches()
+  const features = useFeatures()
   const on = w.isWatching(place)
+  const [open, setOpen] = React.useState(false)
+  const f = useEmailSignup(placeLink(place))
   const label = on
-    ? `Watching ${place.name}: tap to stop`
+    ? `Watching ${place.name}`
     : w.full
       ? "You're watching 10 places (the most)"
-      : `Watch ${place.name} for new alerts`
+      : `Watch ${place.name} for alerts`
+
   return (
-    <Tip label={label} side="bottom">
-      <Button
-        variant={on ? "default" : "outline"}
-        size="icon-sm"
-        aria-label={label}
-        aria-pressed={on}
-        disabled={!on && w.full}
-        onClick={() => w.toggle(place, history)}
-      >
-        {on ? <BellOffIcon /> : <BellPlusIcon />}
-      </Button>
-    </Tip>
+    <Popover
+      open={open}
+      onOpenChange={(next) => {
+        // Opening it is what starts watching.
+        if (next && !on) w.toggle(place, history)
+        setOpen(next)
+      }}
+    >
+      <Tip label={label} side="bottom">
+        <PopoverTrigger
+          render={
+            <Button
+              variant={on ? "default" : "outline"}
+              size="icon-sm"
+              aria-label={label}
+              aria-pressed={on}
+              disabled={!on && w.full}
+            />
+          }
+        >
+          {on ? <BellRingIcon /> : <BellPlusIcon />}
+        </PopoverTrigger>
+      </Tip>
+      <PopoverContent align="end" className="grid w-72 gap-3 p-3 text-xs">
+        <div>
+          <p className="text-sm font-semibold">Watching {place.name}</p>
+          <p className="text-muted-foreground">
+            New weather warnings, relief centres and events here will show under
+            the bell next to the search box.
+          </p>
+        </div>
+        {features.email &&
+          (f.state === "sent" ? (
+            <p className="rounded-md bg-emerald-500/10 px-2.5 py-2 text-emerald-800 dark:text-emerald-300">
+              Check your inbox and tap the link to confirm. Alerts start after
+              that.
+            </p>
+          ) : (
+            <form onSubmit={f.submit} className="grid gap-1.5">
+              <label htmlFor="watch-email" className="font-medium">
+                Also email me
+              </label>
+              <div className="flex gap-1.5">
+                <input
+                  id="watch-email"
+                  type="email"
+                  required
+                  value={f.email}
+                  onChange={(e) => f.setEmail(e.target.value)}
+                  placeholder="you@example.com"
+                  className={emailInput}
+                />
+                <Button
+                  type="submit"
+                  size="sm"
+                  className="h-8"
+                  disabled={f.state === "sending"}
+                >
+                  {f.state === "sending" ? "Sending…" : "Send"}
+                </Button>
+              </div>
+              {f.state !== "idle" && f.state !== "sending" && (
+                <p className="text-destructive" role="alert">
+                  {f.state}
+                </p>
+              )}
+              <p className="text-[11px] text-muted-foreground">
+                One email when something new happens here. Unsubscribe from any
+                email.
+              </p>
+            </form>
+          ))}
+        <Button
+          variant="outline"
+          size="sm"
+          className="h-8 justify-self-start"
+          onClick={() => {
+            w.toggle(place, history)
+            setOpen(false)
+          }}
+        >
+          <BellOffIcon data-icon="inline-start" />
+          Stop watching
+        </Button>
+      </PopoverContent>
+    </Popover>
   )
 }
 

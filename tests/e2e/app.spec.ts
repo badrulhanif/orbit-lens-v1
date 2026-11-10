@@ -115,8 +115,11 @@ test("watching a place lists it under the alerts bell", async ({ page }) => {
   await panel(page)
     .getByRole("button", { name: /^Watch Kuala Lumpur/ })
     .click()
+  // The watch box explains it (and offers email when that's set up).
+  await expect(page.getByText("Watching Kuala Lumpur")).toBeVisible()
+  await page.keyboard.press("Escape")
   await page.getByRole("button", { name: /^Alerts/ }).click()
-  await expect(page.getByText("Watching")).toBeVisible()
+  await expect(page.getByText("Watching", { exact: true })).toBeVisible()
   await expect(
     page.getByRole("button", { name: "Kuala Lumpur", exact: true })
   ).toBeVisible()
