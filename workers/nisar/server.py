@@ -97,7 +97,11 @@ class Handler(BaseHTTPRequestHandler):
         url = urlparse(self.path)
         q = {k: v[0] for k, v in parse_qs(url.query).items()}
         if url.path == "/health":
-            return self._send(200, {"ok": True, "token": bool(reader.TOKEN)})
+            # Render sets RENDER_GIT_COMMIT: shows which code is running.
+            commit = os.environ.get("RENDER_GIT_COMMIT", "")[:7] or "local"
+            return self._send(
+                200, {"ok": True, "token": bool(reader.TOKEN), "commit": commit}
+            )
         if KEY and self.headers.get("X-Worker-Key") != KEY:
             return self._send(401, {"error": "Unauthorised"})
         try:

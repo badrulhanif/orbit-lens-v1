@@ -6,7 +6,7 @@ NISAR products and explained in plain words, for anyone with a browser.
 
 Built for the 2026 NASA Space Apps Challenge, _Dancing with the SARs_.
 
-- **App:** _add your live Vercel link here_
+- **App:** https://orbit-lens-v1.vercel.app/
 - **Findings (story of what we saw):** `/findings` in the app
 - **License:** MIT (see [LICENSE](LICENSE))
 
@@ -15,32 +15,32 @@ Built for the 2026 NASA Space Apps Challenge, _Dancing with the SARs_.
 Search a place (a state, district, town or kampung), or pick a case study,
 and Orbit Lens shows:
 
-| | |
-|---|---|
-| **NISAR radar on the map** | Ground movement (GUNW interferograms) and radar brightness (GCOV), stitched per 12-day cycle. Step through cycles, or press ▶ to play them as a time-lapse. |
-| **Measured change** | Read straight from the full NISAR HDF5 products (only the tiles over the area): land cover in km² on two dates (water, vegetation, open, built-up), what changed, and ground movement in mm with weather and ionosphere corrections. |
-| **Polarizations** | The same pass in HH, HV and a colour mix, plus how HH and HV each changed, with what each one is good at. |
-| **"Likely why"** | Hypotheses for each change, from which polarization moved and how: monsoon flooding, flooded paddy, water under the forest canopy (L-band double bounce), clearing and replanting, wetter soil, sinking ground. |
-| **L-band vs C-band** | Sentinel-1 (C-band, NASA OPERA) beside NISAR (L-band) on a nearby date, in a swipe view. |
-| **Compare** | Any two dates side by side, with a swipe handle. |
-| **Context** | Recorded hazards (USGS, GDACS, NASA EONET, Wikipedia), relief centres open now and weather warnings (Malaysia), population (WorldPop). |
-| **Radar change notices** | Watch a place and pick "Radar changes": after each new NISAR pass, Orbit Lens tells you if vegetation was cleared (or burnt, checked against NASA FIRMS fire hotspots), new water appeared, or the ground kept moving beyond twice its uncertainty. Always marked unconfirmed; never sent to authorities automatically. |
-| **Reports and alerts** | A report for the place (copy, print/PDF, Markdown, CSV, GeoJSON) stating its scope and period; watch a place for in-app or email alerts; community reports, checked by a moderator. |
+|                            |                                                                                                                                                                                                                                                                                                                         |
+| -------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **NISAR radar on the map** | Ground movement (GUNW interferograms) and radar brightness (GCOV), stitched per 12-day cycle. Step through cycles, or press ▶ to play them as a time-lapse.                                                                                                                                                             |
+| **Measured change**        | Read straight from the full NISAR HDF5 products (only the tiles over the area): land cover in km² on two dates (water, vegetation, open, built-up), what changed, and ground movement in mm with weather and ionosphere corrections.                                                                                    |
+| **Polarizations**          | The same pass in HH, HV and a colour mix, plus how HH and HV each changed, with what each one is good at.                                                                                                                                                                                                               |
+| **"Likely why"**           | Hypotheses for each change, from which polarization moved and how: monsoon flooding, flooded paddy, water under the forest canopy (L-band double bounce), clearing and replanting, wetter soil, sinking ground.                                                                                                         |
+| **L-band vs C-band**       | Sentinel-1 (C-band, NASA OPERA) beside NISAR (L-band) on a nearby date, in a swipe view.                                                                                                                                                                                                                                |
+| **Compare**                | Any two dates side by side, with a swipe handle.                                                                                                                                                                                                                                                                        |
+| **Context**                | Recorded hazards (USGS, GDACS, NASA EONET, Wikipedia), relief centres open now and weather warnings (Malaysia), population (WorldPop).                                                                                                                                                                                  |
+| **Radar change notices**   | Watch a place and pick "Radar changes": after each new NISAR pass, Orbit Lens tells you if vegetation was cleared (or burnt, checked against NASA FIRMS fire hotspots), new water appeared, or the ground kept moving beyond twice its uncertainty. Always marked unconfirmed; never sent to authorities automatically. |
+| **Reports and alerts**     | A report for the place (copy, print/PDF, Markdown, CSV, GeoJSON) stating its scope and period; watch a place for in-app or email alerts; community reports, checked by a moderator.                                                                                                                                     |
 
 ## How it fits the challenge
 
-| The challenge asks for | Orbit Lens |
-|---|---|
-| An interactive app using NISAR to track and visualize surface change | Web map with NISAR GUNW and GCOV layers, measured change, time-lapse |
-| One or more kinds of change | Floods and wetlands, forest and plantations, agriculture (paddy), ground movement, landslides |
-| Different polarizations / frequencies | HH, HV, colour mix and per-polarization change; Sentinel-1 C-band beside NISAR L-band |
-| Time series | Every 12-day cycle, playable; movement trend over up to 8 cycles |
-| Ancillary data | Hazard records, population, boundaries, satellite imagery base map |
-| Hypothesize the physical drivers | "Likely why" on every measurement, citing the radar evidence |
-| Human drivers | Paddy cycles, land clearing and replanting, construction, groundwater pumping (as hypotheses) |
-| Storytelling, interactive summary | `/findings` page; swipe views; shareable links |
-| Actionable insights | Radar change notices for slow changes (clearing, new water, moving ground); "what a 12-day radar can and can't do" on `/findings` |
-| Open source, user friendly | MIT licensed; plain-language UI; works on phones |
+| The challenge asks for                                               | Orbit Lens                                                                                                                        |
+| -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
+| An interactive app using NISAR to track and visualize surface change | Web map with NISAR GUNW and GCOV layers, measured change, time-lapse                                                              |
+| One or more kinds of change                                          | Floods and wetlands, forest and plantations, agriculture (paddy), ground movement, landslides                                     |
+| Different polarizations / frequencies                                | HH, HV, colour mix and per-polarization change; Sentinel-1 C-band beside NISAR L-band                                             |
+| Time series                                                          | Every 12-day cycle, playable; movement trend over up to 8 cycles                                                                  |
+| Ancillary data                                                       | Hazard records, population, boundaries, satellite imagery base map                                                                |
+| Hypothesize the physical drivers                                     | "Likely why" on every measurement, citing the radar evidence                                                                      |
+| Human drivers                                                        | Paddy cycles, land clearing and replanting, construction, groundwater pumping (as hypotheses)                                     |
+| Storytelling, interactive summary                                    | `/findings` page; swipe views; shareable links                                                                                    |
+| Actionable insights                                                  | Radar change notices for slow changes (clearing, new water, moving ground); "what a 12-day radar can and can't do" on `/findings` |
+| Open source, user friendly                                           | MIT licensed; plain-language UI; works on phones                                                                                  |
 
 ## How it works
 
@@ -94,16 +94,16 @@ npm run nisar                    # http://localhost:8787
 
 Settings go in `.env.local` (names only; never commit the values):
 
-| Variable | For |
-|---|---|
-| `EARTHDATA_TOKEN` | NISAR service: NASA Earthdata login token (renew every 60 days) |
-| `NISAR_WORKER_URL` | App: where the NISAR service runs (e.g. `http://localhost:8787`) |
-| `NISAR_WORKER_KEY` | Optional shared key between app and service |
-| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | Watches and community reports (`supabase/schema.sql`) |
-| `GMAIL_USER`, `GMAIL_APP_PASSWORD` | Email alerts |
-| `FIRMS_MAP_KEY` | Optional: NASA FIRMS fire hotspots (free key: firms.modaps.eosdis.nasa.gov/api/map_key) |
-| `CRON_SECRET` | Nightly pre-warm and alert jobs (`vercel.json`) |
-| `MODERATOR_KEY` | `/moderate` page |
+| Variable                              | For                                                                                     |
+| ------------------------------------- | --------------------------------------------------------------------------------------- |
+| `EARTHDATA_TOKEN`                     | NISAR service: NASA Earthdata login token (renew every 60 days)                         |
+| `NISAR_WORKER_URL`                    | App: where the NISAR service runs (e.g. `http://localhost:8787`)                        |
+| `NISAR_WORKER_KEY`                    | Optional shared key between app and service                                             |
+| `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | Watches and community reports (`supabase/schema.sql`)                                   |
+| `GMAIL_USER`, `GMAIL_APP_PASSWORD`    | Email alerts                                                                            |
+| `FIRMS_MAP_KEY`                       | Optional: NASA FIRMS fire hotspots (free key: firms.modaps.eosdis.nasa.gov/api/map_key) |
+| `CRON_SECRET`                         | Nightly pre-warm and alert jobs (`vercel.json`)                                         |
+| `MODERATOR_KEY`                       | `/moderate` page                                                                        |
 
 Without the optional services the app still works: radar layers, hazards and
 reports; measured values, alerts and community reports switch themselves off.
