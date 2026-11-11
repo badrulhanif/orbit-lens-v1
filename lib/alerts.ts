@@ -12,11 +12,16 @@ export type Snapshot = {
   warnings: string[]
   centres: number
   checkedAt: string
+  /** The last NISAR cycles checked for radar change notices. */
+  radar?: RadarState
 }
+
+/** NISAR cycle numbers already compared (land cover, movement trend). */
+export type RadarState = { cover?: number; trend?: number }
 
 export type Alert = {
   id: string
-  kind: "warning" | "centres" | "event"
+  kind: "warning" | "centres" | "event" | "radar"
   title: string
   detail: string
   /** The event to open, when there is one. */
@@ -31,6 +36,7 @@ export const TOPICS = [
   { id: "landslide", label: "Landslides" },
   { id: "earthquake", label: "Earthquakes" },
   { id: "other", label: "Storms and other" },
+  { id: "radar", label: "Radar changes (NISAR, every 12 days)" },
 ] as const
 export type Topic = (typeof TOPICS)[number]["id"]
 export const ALL_TOPICS: Topic[] = TOPICS.map((t) => t.id)

@@ -65,7 +65,23 @@ const month = (d: string) => Number(d.slice(5, 7))
 const notable = (v: number, measured: number) =>
   v >= 1 || (measured > 0 && v / measured >= 0.005)
 
-export function coverDrivers(c: CoverResult, bbox: Bbox): Driver[] {
+/** Fires seen between the two passes (from heat-sensing satellites). */
+export type FireInfo = {
+  count: number
+  /** FIRMS: hotspots from NASA's VIIRS sensor; EONET: recorded wildfires. */
+  source: "FIRMS" | "EONET"
+}
+
+const fireWords = (f: FireInfo) =>
+  f.source === "FIRMS"
+    ? `${f.count.toLocaleString("en-GB")} fire hotspot${f.count === 1 ? "" : "s"} (NASA FIRMS)`
+    : `${f.count} recorded wildfire${f.count === 1 ? "" : "s"} (NASA EONET)`
+
+export function coverDrivers(
+  c: CoverResult,
+  bbox: Bbox,
+  fires?: FireInfo | null
+): Driver[] {
   const out: Driver[] = []
   const p = c.pol
   const local = inMalaysiaRegion(bbox)
@@ -77,7 +93,7 @@ export function coverDrivers(c: CoverResult, bbox: Bbox): Driver[] {
       id: "flood",
       cause: monsoon
         ? "Monsoon flooding: the north-east monsoon (November to March) brings days of heavy rain, and river plains fill first."
-        : "Flooding after heavy rain, or a river breaking its banks.",
+        : "Flooding after heavy rain, a river breaking its banks, or new ponds (sand or tin mining, aquaculture).",
       evidence: `${km2(c.newWater)} turned to water. Calm water reflects the radar away like a mirror, so HH and HV both went dark.`,
     })
     if (c.b.open + c.a.open > c.b.vegetation * 0.3) {
@@ -117,12 +133,24 @@ export function coverDrivers(c: CoverResult, bbox: Bbox): Driver[] {
   }
 
   if (notable(c.vegLost, c.measured)) {
+    // Radar can't tell a fire from a chainsaw; heat-sensing satellites can.
+    if (fires && fires.count > 0)
+      out.push({
+        id: "fire",
+        cause:
+          "Burn scar: fire most likely cleared some of it (in Malaysia often peat or land-clearing fires in the dry months).",
+        evidence: `${fireWords(fires)} between the two passes, and HV, the echo from branches and leaves, fell where the vegetation was lost.`,
+      })
     out.push({
       id: "clearing",
       cause: local
         ? "Vegetation removed: land clearing, logging, oil-palm or rubber replanting (every 20–25 years), or crops harvested."
         : "Vegetation removed: land clearing, logging, fire, or crops harvested.",
-      evidence: `${km2(c.vegLost)} went from vegetation to open land and HV, which comes from branches and leaves, fell by more than half (3 dB).`,
+      evidence:
+        `${km2(c.vegLost)} went from vegetation to open land and HV, which comes from branches and leaves, fell by more than half (3 dB).` +
+        (fires?.source === "FIRMS" && fires.count === 0
+          ? " No fire hotspots were seen between the passes, so it wasn't fire."
+          : ""),
     })
   }
 
@@ -204,14 +232,15 @@ export function movementDrivers(
       evidence: `Parts moved toward the satellite (+${s.p95.toFixed(1)} ${unit} at the 95th percentile).`,
     })
   }
-  // Movement no bigger than its own uncertainty isn't a finding yet.
+  // Movement within twice its own uncertainty isn't a finding yet (wet
+  // paddy and weather easily reach one ±).
   const biggest = Math.max(Math.abs(s.p5), Math.abs(s.p95))
-  if (uncertainty != null && biggest <= uncertainty) {
+  if (uncertainty != null && biggest < 2 * uncertainty) {
     return [
       {
         id: "unclear",
         cause:
-          "Not clear yet: the movement is no bigger than its uncertainty, so it may be weather delay rather than the ground.",
+          "Not clear yet: the movement is within twice its uncertainty, so it may be weather delay or wet fields rather than the ground.",
         evidence: `5–95% of the area: ${s.p5.toFixed(1)} to +${s.p95.toFixed(1)} ${unit}, uncertainty ±${uncertainty} ${unit}. More passes will tighten this.`,
       },
     ]

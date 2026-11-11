@@ -12,7 +12,12 @@ import { Button } from "@/components/ui/button"
 import { useJson } from "@/hooks/use-json"
 import type { AppId } from "@/lib/apps"
 import { areaQuery, formatEventDate, type Bbox } from "@/lib/area"
-import { coverDrivers, type CoverResult, type PolStats } from "@/lib/drivers"
+import {
+  coverDrivers,
+  type CoverResult,
+  type FireInfo,
+  type PolStats,
+} from "@/lib/drivers"
 import { coverGranules, granuleIds, measureBox } from "@/lib/measure-plan"
 import type { SarCycle } from "@/lib/sar"
 
@@ -88,7 +93,15 @@ export function MeasuredCover({
   React.useEffect(() => {
     onAvailable?.(ok)
   }, [ok, onAvailable])
-  const drivers = ok ? coverDrivers(c as CoverResult, bbox) : []
+  // Fire between the passes tells a burn scar from clearing.
+  const fires = useJson<{ fires: FireInfo | null }>(
+    ok && c!.a && c!.b && (c!.vegLost ?? 0) > 0
+      ? `/api/fires?${areaQuery(measureBox(bbox), boundaryKey)}&from=${c!.a.date}&to=${c!.b.date}`
+      : null
+  )
+  const drivers = ok
+    ? coverDrivers(c as CoverResult, bbox, fires.data?.fires)
+    : []
   const lines = ok ? reportLines(c!, drivers) : []
   const linesKey = lines.join("\n")
   React.useEffect(() => {

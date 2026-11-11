@@ -57,6 +57,15 @@ export const DATA_GROUPS: {
     title: "Context",
     sources: [
       {
+        name: "NASA FIRMS",
+        by: "NASA LANCE, from the VIIRS sensor",
+        url: "https://firms.modaps.eosdis.nasa.gov/",
+        gives:
+          "Fire hotspots between two radar passes, to tell a burn scar from a cleared plot",
+        coverage: "Daily, worldwide (when a FIRMS key is set up)",
+        licence: "NASA open data",
+      },
+      {
         name: "WorldPop",
         by: "WorldPop, University of Southampton",
         url: "https://www.worldpop.org/",
@@ -208,4 +217,5 @@ export const DATA_CAVEATS = [
   "Yearly rates (mm/yr) need at least 6 months of passes; before that the app shows total movement over the period instead.",
   "Relief centre locations are exact; the flooded area is usually nearby.",
   '"Likely why" notes are hypotheses from the radar alone (which polarization changed and how), not confirmed causes.',
+  "Radar change notices for watched places come from each new NISAR pass (about every 12 days): too slow to warn of floods, and always unconfirmed until checked on the ground.",
 ]

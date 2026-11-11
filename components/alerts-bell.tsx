@@ -8,6 +8,7 @@ import {
   BellRingIcon,
   CloudRainIcon,
   MailIcon,
+  RadarIcon,
   TentIcon,
   TriangleAlertIcon,
   XIcon,
@@ -43,6 +44,7 @@ const ICON: Record<StoredAlert["kind"], React.ReactNode> = {
   warning: <CloudRainIcon className="text-amber-600" />,
   centres: <TentIcon className="text-sky-600" />,
   event: <TriangleAlertIcon className="text-red-600" />,
+  radar: <RadarIcon className="text-violet-600" />,
 }
 
 const ago = (iso: string) => {
@@ -379,6 +381,13 @@ export function WatchButton({
               )
             })}
           </div>
+          {topics.includes("radar") && (
+            <p className="text-[11px] leading-snug text-muted-foreground">
+              Radar changes: vegetation cleared or burnt, new water, or ground
+              that keeps moving, from each new NISAR pass (about every 12 days).
+              Too slow to warn of a flood; a reason to look, not proof.
+            </p>
+          )}
           <p className="text-[11px] text-muted-foreground">
             Emails use the topics picked here when you sign up.
           </p>

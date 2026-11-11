@@ -117,6 +117,11 @@ test("watching a place lists it under the alerts bell", async ({ page }) => {
     .click()
   // The watch box explains it (and offers email when that's set up).
   await expect(page.getByText("Watching Kuala Lumpur")).toBeVisible()
+  // Radar change notices are a topic, explained as unconfirmed.
+  await expect(
+    page.getByRole("button", { name: /Radar changes/ })
+  ).toHaveAttribute("aria-pressed", "true")
+  await expect(page.getByText(/a reason to look, not proof/)).toBeVisible()
   await page.keyboard.press("Escape")
   await page.getByRole("button", { name: /^Alerts/ }).click()
   await expect(page.getByText("Watching", { exact: true })).toBeVisible()

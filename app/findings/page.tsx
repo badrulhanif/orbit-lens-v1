@@ -4,6 +4,7 @@ import { ArrowLeftIcon, ExternalLinkIcon, LightbulbIcon } from "lucide-react"
 
 import {
   BANDS,
+  CAPABILITIES,
   FINDINGS_INTRO,
   FUTURE,
   LIMITS,
@@ -47,6 +48,47 @@ export default function FindingsPage() {
         {STORIES.map((s) => (
           <StoryCard key={s.id} story={s} />
         ))}
+
+        <section className="grid gap-3">
+          <h2 className="text-xl font-semibold">
+            What a radar every 12 days can and can&apos;t do
+          </h2>
+          <p className="leading-relaxed text-muted-foreground">
+            NISAR passes over each place every 12 days. That&apos;s too slow to
+            warn of a flood that rises in hours, but right for changes that
+            build up over weeks: clearing, creeping slopes, sinking ground. So
+            Orbit Lens uses it to watch slow changes and to study fast ones
+            afterwards; warnings come from MetMalaysia. Radar notices for
+            watched places are always marked unconfirmed, and are never sent to
+            authorities automatically.
+          </p>
+          <ul className="grid gap-2">
+            {CAPABILITIES.map((c) => (
+              <li
+                key={c.hazard}
+                className="grid gap-1 rounded-xl p-3 ring-1 ring-foreground/10 sm:grid-cols-[12rem_minmax(0,1fr)] sm:gap-3"
+              >
+                <div className="grid content-start gap-1">
+                  <span className="font-medium">{c.hazard}</span>
+                  <span
+                    className={
+                      "justify-self-start rounded-full px-2 py-0.5 text-[11px] font-medium " +
+                      FIT[c.fit].className
+                    }
+                  >
+                    {FIT[c.fit].label}
+                  </span>
+                </div>
+                <div className="grid gap-0.5 text-sm">
+                  <span>{c.use}</span>
+                  <span className="text-xs text-muted-foreground">
+                    In Orbit Lens: {c.inApp}
+                  </span>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </section>
 
         <section className="grid gap-3">
           <h2 className="text-xl font-semibold">
@@ -114,6 +156,22 @@ export default function FindingsPage() {
       </div>
     </main>
   )
+}
+
+const FIT = {
+  watch: {
+    label: "Watch it change",
+    className: "bg-emerald-500/15 text-emerald-800 dark:text-emerald-300",
+  },
+  after: {
+    label: "After the event",
+    className: "bg-amber-500/15 text-amber-800 dark:text-amber-300",
+  },
+  rarely: {
+    label: "Rarely",
+    className: "bg-muted text-muted-foreground",
+  },
+  no: { label: "Not here", className: "bg-muted text-muted-foreground" },
 }
 
 function StoryCard({ story: s }: { story: Story }) {

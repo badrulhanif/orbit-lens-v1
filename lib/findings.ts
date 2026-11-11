@@ -250,3 +250,72 @@ export const BANDS = [
   "C-band bounces off the top of the canopy, so oil palm, rubber and forest all look much the same grey-green. L-band reaches the trunks and branches: forest, plantations and young crops separate, and water under the trees shows up as bright HH. Over towns and open water both agree: buildings bright, water black.",
   "That's why NISAR matters for a country covered in trees and cloud: floods in forest and peat swamp, and clearing under a closed canopy, are hard to see any other way.",
 ]
+
+/** What a 12-day radar can and can't do, and where Orbit Lens uses it. */
+export const CAPABILITIES: {
+  hazard: string
+  fit: "watch" | "after" | "rarely" | "no"
+  use: string
+  inApp: string
+}[] = [
+  {
+    hazard: "Illegal logging, land clearing",
+    fit: "watch",
+    use: "Clearing takes weeks, so a pass every 12 days catches it.",
+    inApp: "Forest / Agriculture → vegetation lost; radar notice",
+  },
+  {
+    hazard: "Slopes creeping (before landslides)",
+    fit: "watch",
+    use: "Slopes often creep for weeks or months before they fail.",
+    inApp: "Landslide → movement trend; radar notice",
+  },
+  {
+    hazard: "Sinking ground, coastal subsidence",
+    fit: "watch",
+    use: "Millimetres a year, measured over many passes.",
+    inApp: "Subsidence → trend, then yearly rate",
+  },
+  {
+    hazard: "New ponds, mining, standing water",
+    fit: "watch",
+    use: "New water that stays shows up pass after pass.",
+    inApp: "Flood → new water; radar notice",
+  },
+  {
+    hazard: "Rice and plantations",
+    fit: "watch",
+    use: "Crop cycles last months; HV follows the plants.",
+    inApp: "Agriculture → land cover, polarizations",
+  },
+  {
+    hazard: "Floods",
+    fit: "after",
+    use: "Too slow to warn (rivers rise in hours). Maps the extent if a pass falls during the flood, even under trees, and the recovery after.",
+    inApp: "Flood → new water; warnings come from MetMalaysia",
+  },
+  {
+    hazard: "Forest and peat fires",
+    fit: "after",
+    use: "Radar can't see flames or heat; it maps the burn scar afterwards.",
+    inApp: 'Vegetation lost + NASA FIRMS hotspots → "burn scar"',
+  },
+  {
+    hazard: "Earthquakes (e.g. Sabah)",
+    fit: "after",
+    use: "How far the ground moved, after the event.",
+    inApp: "Earthquake → movement between passes",
+  },
+  {
+    hazard: "Oil spills",
+    fit: "rarely",
+    use: "NISAR mostly images land and ice; Sentinel-1 covers the sea far more often.",
+    inApp: "Not covered",
+  },
+  {
+    hazard: "Glaciers, sea ice, hurricanes",
+    fit: "no",
+    use: "Not found in Malaysia.",
+    inApp: "Not covered",
+  },
+]

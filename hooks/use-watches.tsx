@@ -7,6 +7,7 @@ import {
   newAlerts,
   snapshotOf,
   type Alert,
+  type RadarState,
   type Snapshot,
   type Topic,
 } from "@/lib/alerts"
@@ -26,6 +27,9 @@ type Watched = {
   snapshot: Snapshot | null
   /** What to alert about (all when missing). */
   topics?: Topic[]
+  /** NISAR cycles already compared, and when radar was last checked. */
+  radar?: RadarState
+  radarAt?: string
 }
 export type StoredAlert = Alert & {
   link: string
@@ -38,6 +42,8 @@ const WATCHES = "orbit-lens:watches"
 const ALERTS = "orbit-lens:alerts"
 const MAX_WATCHES = 10
 const CHECK_EVERY = 15 * 60_000
+// NISAR passes every 12 days; measuring is slow, so check a few times a day.
+const RADAR_EVERY = 6 * 60 * 60_000
 
 function load<T>(key: string, fallback: T): T {
   try {
@@ -57,6 +63,19 @@ function save(key: string, value: unknown) {
 /** A place's canonical link (place only, no filters). */
 export const placeLink = (place: Place) =>
   toSearch({ place, filter: "all", period: "all", event: null })
+
+async function radarOf(link: string, prev: RadarState | undefined) {
+  const q = new URLSearchParams({ link })
+  if (prev?.cover != null) q.set("cover", String(prev.cover))
+  if (prev?.trend != null) q.set("trend", String(prev.trend))
+  const res = await fetch(`/api/alerts/radar?${q}`).catch(() => null)
+  return res?.ok
+    ? ((await res.json().catch(() => null)) as {
+        state: RadarState
+        alerts: Alert[]
+      } | null)
+    : null
+}
 
 async function historyOf(link: string): Promise<AreaHistory | null> {
   const view = fromSearch(link)
@@ -84,6 +103,8 @@ function useWatchesState() {
   }, [])
 
   const storeWatches = React.useCallback((next: Watched[]) => {
+    // Right away, so back-to-back updates build on each other.
+    watchesRef.current = next
     setWatches(next)
     save(WATCHES, next)
   }, [])
@@ -96,6 +117,67 @@ function useWatchesState() {
       }),
     []
   )
+
+  /** Save new alerts and show system notifications for them. */
+  const announce = React.useCallback(
+    (found: StoredAlert[]) => {
+      if (!found.length) return
+      storeAlerts((prev) => {
+        const known = new Set(prev.map((a) => `${a.link}|${a.id}`))
+        return [
+          ...found.filter((a) => !known.has(`${a.link}|${a.id}`)),
+          ...prev,
+        ]
+      })
+      // A system notification, if the user turned them on.
+      if (
+        typeof Notification !== "undefined" &&
+        Notification.permission === "granted"
+      )
+        for (const a of found.slice(0, 3))
+          new Notification(`${a.place}: ${a.title}`, {
+            body: a.detail,
+            tag: a.id,
+          })
+    },
+    [storeAlerts]
+  )
+
+  // Radar change notices: one place at a time, in the background.
+  const radarBusy = React.useRef(false)
+  const checkRadar = React.useCallback(async () => {
+    if (radarBusy.current) return
+    radarBusy.current = true
+    try {
+      const due = watchesRef.current.filter(
+        (w) =>
+          cleanTopics(w.topics).includes("radar") &&
+          (!w.radarAt || Date.now() - Date.parse(w.radarAt) > RADAR_EVERY)
+      )
+      for (const w of due) {
+        const r = await radarOf(w.link, w.radar)
+        if (!r) continue
+        const now = new Date().toISOString()
+        // Only this watch's radar fields change (others may have moved on).
+        storeWatches(
+          watchesRef.current.map((x) =>
+            x.link === w.link ? { ...x, radar: r.state, radarAt: now } : x
+          )
+        )
+        announce(
+          r.alerts.map((a) => ({
+            ...a,
+            link: w.link,
+            place: w.name,
+            at: now,
+            read: false,
+          }))
+        )
+      }
+    } finally {
+      radarBusy.current = false
+    }
+  }, [announce, storeWatches])
 
   const check = React.useCallback(async () => {
     const list = watchesRef.current
@@ -113,23 +195,16 @@ function useWatchesState() {
         found.push({ ...a, link: w.link, place: w.name, at: now, read: false })
       updated.push({ ...w, snapshot: snapshotOf(history) })
     }
-    storeWatches(updated)
-    if (!found.length) return
-    storeAlerts((prev) => {
-      const known = new Set(prev.map((a) => `${a.link}|${a.id}`))
-      return [...found.filter((a) => !known.has(`${a.link}|${a.id}`)), ...prev]
-    })
-    // A system notification, if the user turned them on.
-    if (
-      typeof Notification !== "undefined" &&
-      Notification.permission === "granted"
+    // Keep fields set meanwhile (radar), update the snapshot.
+    const snap = new Map(updated.map((w) => [w.link, w.snapshot]))
+    storeWatches(
+      watchesRef.current.map((w) =>
+        snap.has(w.link) ? { ...w, snapshot: snap.get(w.link)! } : w
+      )
     )
-      for (const a of found.slice(0, 3))
-        new Notification(`${a.place}: ${a.title}`, {
-          body: a.detail,
-          tag: a.id,
-        })
-  }, [storeAlerts, storeWatches])
+    announce(found)
+    void checkRadar()
+  }, [announce, checkRadar, storeWatches])
 
   // Check on load and every 15 minutes while the page is open.
   const count = watches.length

@@ -24,6 +24,7 @@ and Orbit Lens shows:
 | **L-band vs C-band** | Sentinel-1 (C-band, NASA OPERA) beside NISAR (L-band) on a nearby date, in a swipe view. |
 | **Compare** | Any two dates side by side, with a swipe handle. |
 | **Context** | Recorded hazards (USGS, GDACS, NASA EONET, Wikipedia), relief centres open now and weather warnings (Malaysia), population (WorldPop). |
+| **Radar change notices** | Watch a place and pick "Radar changes": after each new NISAR pass, Orbit Lens tells you if vegetation was cleared (or burnt, checked against NASA FIRMS fire hotspots), new water appeared, or the ground kept moving beyond twice its uncertainty. Always marked unconfirmed; never sent to authorities automatically. |
 | **Reports and alerts** | A report for the place (copy, print/PDF, Markdown, CSV, GeoJSON) stating its scope and period; watch a place for in-app or email alerts; community reports, checked by a moderator. |
 
 ## How it fits the challenge
@@ -38,6 +39,7 @@ and Orbit Lens shows:
 | Hypothesize the physical drivers | "Likely why" on every measurement, citing the radar evidence |
 | Human drivers | Paddy cycles, land clearing and replanting, construction, groundwater pumping (as hypotheses) |
 | Storytelling, interactive summary | `/findings` page; swipe views; shareable links |
+| Actionable insights | Radar change notices for slow changes (clearing, new water, moving ground); "what a 12-day radar can and can't do" on `/findings` |
 | Open source, user friendly | MIT licensed; plain-language UI; works on phones |
 
 ## How it works
@@ -51,6 +53,8 @@ Browser (Next.js, MapLibre)
    │                                              (HTTP range requests, Earthdata login)
    ├── /api/area-history    hazard records (USGS, GDACS, EONET, Wikipedia/Wikidata, JKM, MetMalaysia)
    ├── /api/population      WorldPop
+   ├── /api/fires           NASA FIRMS hotspots (or EONET wildfires)
+   ├── /api/alerts/radar    radar change notices for a watched place
    └── /api/alerts, /api/reports   Supabase (watch list, community reports), Gmail SMTP
 ```
 
@@ -69,7 +73,7 @@ Browser (Next.js, MapLibre)
 ## Data
 
 NISAR (NASA-ISRO, via ASF DAAC), NASA GIBS, Sentinel-1 (ESA Copernicus,
-NASA OPERA RTC-S1), USGS, GDACS, NASA EONET, Wikipedia/Wikidata, JKM
+NASA OPERA RTC-S1), NASA FIRMS, USGS, GDACS, NASA EONET, Wikipedia/Wikidata, JKM
 InfoBencana, MetMalaysia (data.gov.my), WorldPop, GeoNames, OpenStreetMap,
 Natural Earth, CARTO, Esri, OpenFreeMap. Full list with licences: the
 "About the data" panel in the app (`lib/data-sources.ts`).
@@ -97,6 +101,7 @@ Settings go in `.env.local` (names only; never commit the values):
 | `NISAR_WORKER_KEY` | Optional shared key between app and service |
 | `SUPABASE_URL`, `SUPABASE_SECRET_KEY` | Watches and community reports (`supabase/schema.sql`) |
 | `GMAIL_USER`, `GMAIL_APP_PASSWORD` | Email alerts |
+| `FIRMS_MAP_KEY` | Optional: NASA FIRMS fire hotspots (free key: firms.modaps.eosdis.nasa.gov/api/map_key) |
 | `CRON_SECRET` | Nightly pre-warm and alert jobs (`vercel.json`) |
 | `MODERATOR_KEY` | `/moderate` page |
 

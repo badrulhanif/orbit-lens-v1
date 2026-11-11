@@ -1,6 +1,13 @@
 import type { NextRequest } from "next/server"
 
-import { cleanTopics, newAlerts, snapshotOf } from "@/lib/alerts"
+import {
+  cleanTopics,
+  newAlerts,
+  snapshotOf,
+  type Alert,
+  type RadarState,
+} from "@/lib/alerts"
+import { radarUpdate } from "@/lib/radar-notices"
 import {
   appUrl,
   emailEnabled,
@@ -8,6 +15,7 @@ import {
   escapeHtml,
   sendEmail,
 } from "@/lib/server/email"
+import { radarLatest } from "@/lib/server/radar-alerts"
 import { select, supabaseEnabled, update } from "@/lib/server/supabase"
 import { historyFor, type Watch } from "@/lib/server/watches"
 
@@ -16,7 +24,8 @@ const BUDGET_MS = 270_000
 
 /**
  * Daily (Vercel Cron, see vercel.json): for every confirmed watch, email
- * what's new at the place since the last check.
+ * what's new at the place since the last check, plus radar change notices
+ * when a new NISAR pass has arrived (for watchers who chose them).
  *   GET /api/cron/alerts   (Authorization: Bearer $CRON_SECRET)
  */
 export async function GET(request: NextRequest) {
@@ -45,8 +54,33 @@ export async function GET(request: NextRequest) {
     if (!history) continue
     checked++
     const snapshot = snapshotOf(history)
+
+    // Radar: measure once per place, from the oldest cycle any radar
+    // watcher has seen. Slow measurements carry over to the next run.
+    const radarWatchers = group.filter((w) =>
+      cleanTopics(w.place.topics).includes("radar")
+    )
+    const oldest = (k: keyof RadarState) => {
+      const v = radarWatchers.map((w) => w.snapshot?.radar?.[k])
+      return v.some((x) => x == null) ? undefined : Math.min(...(v as number[]))
+    }
+    const radar = radarWatchers.length
+      ? await radarLatest(
+          link,
+          { cover: oldest("cover"), trend: oldest("trend") },
+          Math.min(150_000, BUDGET_MS - (Date.now() - started))
+        ).catch(() => null)
+      : null
+
     for (const w of group) {
-      const alerts = newAlerts(w.snapshot, history, cleanTopics(w.place.topics))
+      const topics = cleanTopics(w.place.topics)
+      const alerts: Alert[] = newAlerts(w.snapshot, history, topics)
+      let radarState = w.snapshot?.radar
+      if (radar && topics.includes("radar")) {
+        const r = radarUpdate(radarState, radar.latest, radar.bbox)
+        radarState = r.state
+        alerts.push(...r.alerts)
+      }
       try {
         if (alerts.length) {
           const name = escapeHtml(w.place.name)
@@ -66,7 +100,7 @@ export async function GET(request: NextRequest) {
           sent++
         }
         await update("watches", `id=eq.${w.id}`, {
-          snapshot,
+          snapshot: { ...snapshot, radar: radarState },
           ...(alerts.length ? { last_sent_at: new Date().toISOString() } : {}),
         })
       } catch (error) {

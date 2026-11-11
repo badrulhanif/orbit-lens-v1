@@ -276,3 +276,90 @@ test("likely-why notes follow the radar evidence", async () => {
   )
   expect(noisy.map((d) => d.id)).toEqual(["unclear"])
 })
+
+test("radar notices: baseline first, then only real changes, marked unconfirmed", async () => {
+  const { radarUpdate } = await import("@/lib/radar-notices")
+  const box: [number, number, number, number] = [100, 5, 101, 6]
+  const day = (date: string) => ({
+    date,
+    water: 30,
+    vegetation: 5000,
+    open: 300,
+    built: 400,
+    rvi: 0.88,
+  })
+  const cover = {
+    a: day("2026-10-02"),
+    b: day("2026-10-14"),
+    newWater: 0.5,
+    receded: 0,
+    vegLost: 40,
+    vegGained: 0,
+    measured: 5800,
+  }
+  // First check: baseline only.
+  const first = radarUpdate(
+    undefined,
+    { cover: { cycle: 33, result: cover } },
+    box
+  )
+  expect(first.alerts).toEqual([])
+  expect(first.state.cover).toBe(33)
+  // A new cycle with 40 km² cleared (> 0.5% of 5,800 km²).
+  const next = radarUpdate(
+    { cover: 32 },
+    {
+      cover: { cycle: 33, result: cover, fires: { count: 0, source: "FIRMS" } },
+    },
+    box
+  )
+  expect(next.alerts.map((a) => a.title)).toEqual([
+    "Vegetation cleared: 40.0 km²",
+  ])
+  expect(next.alerts[0].detail).toMatch(/Unconfirmed/)
+  // With fire hotspots: a burn scar.
+  const burnt = radarUpdate(
+    { cover: 32 },
+    {
+      cover: {
+        cycle: 33,
+        result: cover,
+        fires: { count: 12, source: "FIRMS" },
+      },
+    },
+    box
+  )
+  expect(burnt.alerts[0].title).toMatch(/burn scar/)
+  // Small changes in a big state: nothing to tell.
+  const small = radarUpdate(
+    { cover: 32 },
+    { cover: { cycle: 33, result: { ...cover, vegLost: 20 } } },
+    box
+  )
+  expect(small.alerts).toEqual([])
+  // A failed measurement is retried (state unchanged).
+  const failed = radarUpdate(
+    { cover: 32 },
+    { cover: { cycle: 33, result: null } },
+    box
+  )
+  expect(failed.state.cover).toBe(32)
+  // Movement inside its uncertainty: no notice.
+  const trend = {
+    available: true,
+    to: "2026-10-10",
+    pairs: 7,
+    uncertainty: 35,
+    total: { p5: -28, p95: 23, moving: 0.19, threshold: 20 },
+  }
+  expect(
+    radarUpdate({ trend: 31 }, { trend: { cycle: 32, result: trend } }, box)
+      .alerts
+  ).toEqual([])
+  const moving = radarUpdate(
+    { trend: 31 },
+    { trend: { cycle: 32, result: { ...trend, uncertainty: 5 } } },
+    box
+  )
+  expect(moving.alerts[0].title).toMatch(/^Ground moving/)
+})
