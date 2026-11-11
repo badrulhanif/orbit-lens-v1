@@ -10,7 +10,7 @@
     "start": "next start",
     "lint": "eslint",
     "format": "prettier --write \"**/*.{ts,tsx}\"",
-    "typecheck": "tsc --noEmit",
+    "typecheck": "next typegen && tsc --noEmit",
     "postinstall": "node scripts/copy-maplibre-worker.mjs",
     "data:gazetteer": "node scripts/build-gazetteer.mjs && node scripts/enrich-bboxes.mjs",
     "data:boundaries": "node scripts/fetch-boundaries.mjs",
