@@ -178,3 +178,21 @@ test("radar layer has a time-lapse and a C-band comparison", async ({
     timeout: 30_000,
   })
 })
+
+test("Canada's RCM sits beside NISAR over Masamba", async ({ page }) => {
+  await page.goto("/?name=Masamba&at=-2.547,120.326&kind=Town")
+  await page.getByRole("button", { name: /Signal quality/ }).click()
+  const nav = page.getByRole("navigation", { name: "NISAR cycles" })
+  const rcm = nav.getByRole("button", { name: "RCM 2020" })
+  await expect(rcm).toBeVisible({ timeout: 30_000 })
+  await rcm.click()
+  await expect(rcm).toHaveAttribute("aria-pressed", "true")
+  await expect(
+    page.getByText("RCM C-band (Canada) · 18 Jul 2020")
+  ).toBeVisible()
+  await expect(
+    page.getByText(/© Government of Canada \(2020\)/).first()
+  ).toBeVisible()
+  const image = await page.request.get("/rcm/masamba-2020-07-18-hh.webp")
+  expect(image.ok()).toBe(true)
+})

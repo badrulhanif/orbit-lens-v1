@@ -136,13 +136,40 @@ export function SarPassNav({
         {nisar.layer === "signal" && (
           <Tip label="Set Sentinel-1 (C-band) beside NISAR (L-band) on a nearby date">
             <Button
-              variant={nisar.cband ? "default" : "ghost"}
+              variant={
+                nisar.cband && nisar.cbandSource === "s1" ? "default" : "ghost"
+              }
               size="sm"
-              aria-pressed={nisar.cband}
+              aria-pressed={nisar.cband && nisar.cbandSource === "s1"}
               className="h-7 px-2 text-[11px]"
-              onClick={() => nisar.setCband(!nisar.cband)}
+              onClick={() =>
+                nisar.showCband(
+                  nisar.cband && nisar.cbandSource === "s1" ? null : "s1"
+                )
+              }
             >
               C-band
+            </Button>
+          </Tip>
+        )}
+        {nisar.layer === "signal" && nisar.rcm && (
+          <Tip
+            label={`Set Canada's RCM radar (C-band, ${nisar.rcm.day.slice(0, 4)}) beside NISAR: ${nisar.rcm.event}`}
+          >
+            <Button
+              variant={
+                nisar.cband && nisar.cbandSource === "rcm" ? "default" : "ghost"
+              }
+              size="sm"
+              aria-pressed={nisar.cband && nisar.cbandSource === "rcm"}
+              className="h-7 px-2 text-[11px]"
+              onClick={() =>
+                nisar.showCband(
+                  nisar.cband && nisar.cbandSource === "rcm" ? null : "rcm"
+                )
+              }
+            >
+              RCM {nisar.rcm.day.slice(0, 4)}
             </Button>
           </Tip>
         )}

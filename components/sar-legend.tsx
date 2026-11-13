@@ -3,7 +3,8 @@
 import * as React from "react"
 import { ChevronDownIcon, InfoIcon } from "lucide-react"
 
-import type { SarLayer } from "@/lib/sar"
+import { RCM_CREDIT, type RcmScene } from "@/lib/rcm"
+import { formatRange, type SarLayer } from "@/lib/sar"
 import { cn } from "@/lib/utils"
 
 const INFO: Record<SarLayer, { title: string; about: string; more: string }> = {
@@ -23,11 +24,13 @@ const INFO: Record<SarLayer, { title: string; about: string; more: string }> = {
 export function SarLegend({
   layer,
   cband = false,
+  rcm = null,
   className,
 }: {
   layer: SarLayer
-  /** Sentinel-1 is on the swipe side. */
+  /** C-band (Sentinel-1, or RCM when `rcm` is set) is on the swipe side. */
   cband?: boolean
+  rcm?: RcmScene | null
   className?: string
 }) {
   const [open, setOpen] = React.useState(false)
@@ -77,7 +80,43 @@ export function SarLegend({
         </ul>
       )}
 
-      {cband && (
+      {cband && rcm && (
+        <div className="grid gap-1.5 border-t pt-2">
+          <p className="font-medium">Right side: RCM (C-band, HH)</p>
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            Canada&apos;s RADARSAT Constellation Mission,{" "}
+            {formatRange(rcm.day, rcm.day)}: {`${rcm.event}.`}
+          </p>
+          <ul className="grid gap-1.5 text-xs">
+            <Swatch color="#e5e5e5" label="Bright">
+              Buildings, rough ground, slopes facing the radar
+            </Swatch>
+            <Swatch color="#7a7a7a" label="Grey">
+              Forest and crops
+            </Swatch>
+            <Swatch color="#111111" label="Dark">
+              Water and smooth, wet ground
+            </Swatch>
+          </ul>
+          <p className="text-[11px] leading-snug text-muted-foreground">
+            Unlike NISAR&apos;s terrain-corrected layer, hills keep their light
+            and shadow here.
+          </p>
+          <p className="text-[10px] leading-snug text-muted-foreground">
+            {RCM_CREDIT.copyright(rcm.day.slice(0, 4))}. {RCM_CREDIT.mark}.{" "}
+            <a
+              href={RCM_CREDIT.licence}
+              target="_blank"
+              rel="noreferrer"
+              className="underline underline-offset-2 hover:text-foreground"
+            >
+              Licence
+            </a>
+          </p>
+        </div>
+      )}
+
+      {cband && !rcm && (
         <div className="grid gap-1.5 border-t pt-2">
           <p className="font-medium">Right side: Sentinel-1 (C-band)</p>
           <ul className="grid gap-1.5 text-xs">

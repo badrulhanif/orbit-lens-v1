@@ -516,7 +516,15 @@ export function OrbitLens() {
                   />
                 ) : (
                   nisar.layer && (
-                    <SarLegend layer={nisar.layer} cband={nisar.cband} />
+                    <SarLegend
+                      layer={nisar.layer}
+                      cband={nisar.cband}
+                      rcm={
+                        nisar.cband && nisar.cbandSource === "rcm"
+                          ? nisar.rcm
+                          : null
+                      }
+                    />
                   )
                 )}
               </div>

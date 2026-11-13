@@ -3,6 +3,7 @@
 import * as React from "react"
 
 import type { LatLng } from "@/lib/geo"
+import { rcmCorners, rcmSceneFor } from "@/lib/rcm"
 import {
   formatRange,
   gibsSignalTiles,
@@ -33,6 +34,22 @@ function padded([w, s, e, n]: Bbox, factor = 0.3): Bbox {
   const dy = (n - s) * factor
   return [w - dx, s - dy, e + dx, n + dy]
 }
+
+/** Is [lon, lat] inside a footprint ring? (ray casting) */
+function inRing([x, y]: [number, number], ring: [number, number][]) {
+  let inside = false
+  for (let i = 0, j = ring.length - 1; i < ring.length; j = i++) {
+    const [xi, yi] = ring[i]
+    const [xj, yj] = ring[j]
+    if (yi > y !== yj > y && x < ((xj - xi) * (y - yi)) / (yj - yi) + xi)
+      inside = !inside
+  }
+  return inside
+}
+
+/** Does one of the cycle's swaths cover [lon, lat]? */
+const reaches = (c: SarCycle, point: [number, number]) =>
+  c.passes.some((p) => inRing(point, p.footprint))
 
 const around = (p: LatLng, deg: number): Bbox => [
   p.longitude - deg,
@@ -90,6 +107,8 @@ export function useNisar({
   React.useEffect(() => {
     latest.current = { layer, coverage, cycleIndex }
   }, [layer, coverage, cycleIndex])
+  // With RCM on the swipe side: the spot NISAR should cover too.
+  const rcmFocus = React.useRef<[number, number] | null>(null)
   const onFirstLoadRef = React.useRef(onFirstLoad)
   React.useEffect(() => {
     onFirstLoadRef.current = onFirstLoad
@@ -117,11 +136,16 @@ export function useNisar({
         if (!res.ok || !body)
           throw new Error(body?.error ?? "Couldn't reach NISAR data.")
         const data = body as SarCoverageResponse
-        const i = cycleIndexFor(
+        let i = cycleIndexFor(
           data.cycles,
           options.preferDate,
           options.keepCycle
         )
+        const focus = rcmFocus.current
+        if (focus && data.cycles[i] && !reaches(data.cycles[i], focus)) {
+          const j = data.cycles.findIndex((c) => reaches(c, focus))
+          if (j >= 0) i = j
+        }
         setCoverage(data)
         setCycleIndex(i)
         if (options.first && data.cycles[i])
@@ -293,8 +317,32 @@ export function useNisar({
     setCompare(next)
   }, [])
   const cbandOn = cband && layer === "signal" && !compare && !!cycle
+  // Where Canada's RCM imaged the area (an archive scene, not a nearby
+  // date), it can stand in for Sentinel-1 on the C-band side.
+  const [cbandSource, setCbandSource] = React.useState<"s1" | "rcm">("s1")
+  const rcmScene =
+    layer === "signal" && coverage?.layer === "signal"
+      ? rcmSceneFor(coverage.bbox)
+      : null
+  const rcmOn = cbandOn && cbandSource === "rcm" && !!rcmScene
+  const showCband = (source: "s1" | "rcm" | null) => {
+    if (source) setCbandSource(source)
+    setCband(!!source)
+    // The newest cycle may not reach the RCM scene's focus (its swaths
+    // cover the rest of the view); jump to the newest one that does.
+    if (source !== "rcm" || !rcmScene || !cycles) return
+    const { focus } = rcmScene
+    if (cycle && reaches(cycle, focus)) return
+    const i = cycles.findIndex((c) => reaches(c, focus))
+    if (i >= 0) setCycleIndex(i)
+  }
+  // Later searches (the map moved) keep to cycles that reach it too.
+  const focusNow = rcmOn ? rcmScene!.focus : null
+  React.useEffect(() => {
+    rcmFocus.current = focusNow
+  }, [focusNow])
   const s1Key =
-    cbandOn && coverage
+    cbandOn && !rcmOn && coverage
       ? `${cycle!.end.slice(0, 10)}|${coverage.bbox.join(",")}`
       : null
   const [s1, setS1] = React.useState<{
@@ -328,40 +376,55 @@ export function useNisar({
     layer && main.pieces.length
       ? { layer, pieces: main.pieces, opacity: 0.85 }
       : null
-  const compareOverlay: SarOverlay | null = cbandOn
-    ? s1Now?.day
-      ? {
-          layer: "signal",
-          pieces: [
-            {
-              id: `s1-${s1Now.day.day}`,
-              kind: "tiles",
-              tiles: sentinel1Tiles(s1Now.day.day),
-              bounds: s1Now.day.bbox,
-              maxzoom: 12,
-              attribution:
-                "Sentinel-1: ESA Copernicus, processed by NASA OPERA (JPL) via NASA GIBS",
-            },
-          ],
-          opacity: 0.85,
-        }
-      : null
-    : layer && compare && side.pieces.length
-      ? { layer, pieces: side.pieces, opacity: 0.85 }
-      : null
+  const compareOverlay: SarOverlay | null = rcmOn
+    ? {
+        layer: "signal",
+        pieces: [
+          {
+            id: `rcm-${rcmScene!.id}`,
+            kind: "image",
+            url: rcmScene!.url,
+            coordinates: rcmCorners(rcmScene!),
+          },
+        ],
+        opacity: 0.9,
+      }
+    : cbandOn
+      ? s1Now?.day
+        ? {
+            layer: "signal",
+            pieces: [
+              {
+                id: `s1-${s1Now.day.day}`,
+                kind: "tiles",
+                tiles: sentinel1Tiles(s1Now.day.day),
+                bounds: s1Now.day.bbox,
+                maxzoom: 12,
+                attribution:
+                  "Sentinel-1: ESA Copernicus, processed by NASA OPERA (JPL) via NASA GIBS",
+              },
+            ],
+            opacity: 0.85,
+          }
+        : null
+      : layer && compare && side.pieces.length
+        ? { layer, pieces: side.pieces, opacity: 0.85 }
+        : null
   const waiting = main.waiting + (compare ? side.waiting : 0)
 
   /** Labels for the two sides of the swipe view. */
   const compareLabels = cbandOn
     ? {
         before: `NISAR L-band · ${formatRange(cycle!.start, cycle!.end)}`,
-        after: s1Now
-          ? s1Now.day
-            ? `Sentinel-1 C-band · ${formatRange(s1Now.day.day, s1Now.day.day)}`
-            : s1Now.error
-              ? "Sentinel-1: couldn't load"
-              : "Sentinel-1: no pass within 8 days"
-          : "Sentinel-1: finding a pass…",
+        after: rcmOn
+          ? `RCM C-band (Canada) · ${formatRange(rcmScene!.day, rcmScene!.day)}`
+          : s1Now
+            ? s1Now.day
+              ? `Sentinel-1 C-band · ${formatRange(s1Now.day.day, s1Now.day.day)}`
+              : s1Now.error
+                ? "Sentinel-1: couldn't load"
+                : "Sentinel-1: no pass within 8 days"
+            : "Sentinel-1: finding a pass…",
       }
     : compare
       ? {
@@ -391,5 +454,11 @@ export function useNisar({
     /** Sentinel-1 (C-band) beside NISAR (L-band); "signal" layer only. */
     cband: cbandOn,
     setCband,
+    /** Which C-band image is on the swipe side. */
+    cbandSource: rcmOn ? ("rcm" as const) : ("s1" as const),
+    /** Turn the C-band view on with a source, or off with null. */
+    showCband,
+    /** An RCM archive image over this area (Canada's C-band radar). */
+    rcm: rcmScene,
   }
 }

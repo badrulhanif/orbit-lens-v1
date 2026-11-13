@@ -51,6 +51,15 @@ export const DATA_GROUPS: {
         coverage: "Every few days since 2023",
         licence: "Copernicus open data; NASA open data",
       },
+      {
+        name: "RADARSAT Constellation Mission (RCM)",
+        by: "Canadian Space Agency open data. RADARSAT Constellation Mission Imagery © Government of Canada (2020). RADARSAT is an official mark of the Canadian Space Agency",
+        url: "https://donnees-data.asc-csa.gc.ca/en/dataset/rcm",
+        gives:
+          "C-band radar (HH) over Masamba, Indonesia, 5 days after the July 2020 flash flood, calibrated and lined up with NISAR, to set beside it",
+        coverage: "One archive image: 18 Jul 2020",
+        licence: "RCM Public User License Agreement",
+      },
     ],
   },
   {

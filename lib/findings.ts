@@ -25,6 +25,7 @@ export type Story = {
 export const FINDINGS_INTRO = [
   "NISAR, the NASA-ISRO radar satellite, passes over Malaysia every 12 days, day or night and through monsoon cloud. Its long L-band wave (24 cm) passes through leaves to the branches and ground below, and its two polarizations (HH and HV) react differently to water, crops, forest and buildings.",
   "We used Orbit Lens to measure three places from the full NISAR products, from the first public passes over Malaysia (June 2026) to October 2026. Each story below gives the measured numbers, what we think caused them, and what to watch as the north-east monsoon arrives.",
+  "A fourth story crosses the border to Masamba, Indonesia, where Canada's RCM radar caught the aftermath of a 2020 flash flood: a partner agency's archive gives NISAR a \"before\" picture it could not take itself.",
 ]
 
 export const POLARIZATION_GUIDE = [
@@ -243,6 +244,67 @@ export const STORIES: Story[] = [
     ],
     next: "From about January 2027 NISAR will have six months of passes here, and Orbit Lens switches to a yearly rate (mm/yr). Spots that keep moving the same way, pair after pair, will stand out from the weather.",
   },
+  {
+    id: "masamba",
+    kicker: "Floods · Masamba, Indonesia · with Canada's RCM",
+    title: "A flash flood, through two radars six years apart",
+    dates:
+      "RCM 18 July 2020 · NISAR 3 July → 31 October 2026 · 964 km² measured",
+    place: {
+      id: "case-masamba",
+      name: "Masamba, Indonesia",
+      kind: "Town",
+      icon: "area",
+      area: "North Luwu, South Sulawesi, Indonesia",
+      address: "",
+      latitude: -2.547,
+      longitude: 120.326,
+      bbox: [120.12, -2.7, 120.4, -2.42],
+    },
+    app: "flood",
+    figures: [
+      { label: "RCM (Canada)", value: "18 Jul 2020", sub: "5 days after" },
+      {
+        label: "Very dark lowland",
+        value: "17 → 3 km²",
+        sub: "RCM 2020 vs NISAR 2026",
+      },
+      { label: "Lined up", value: "≈150 m", sub: "RCM vs NISAR" },
+      {
+        label: "Vegetation lost",
+        value: "6.4 km²",
+        sub: "NISAR, Jul → Oct 2026",
+      },
+    ],
+    images: [
+      {
+        src: "/findings/masamba-rcm-hh.png",
+        caption: "18 Jul 2020, RCM C-band HH, 5 days after the flood",
+      },
+      {
+        src: "/findings/masamba-nisar-hh.png",
+        caption: "3 Jul 2026, NISAR L-band HH, same grid and grey scale",
+      },
+      {
+        src: "/findings/masamba-dark.png",
+        caption: "Very dark lowland: orange in 2020 only, blue in both",
+      },
+      {
+        src: "/findings/masamba-nisar-rgb.png",
+        caption: "31 Oct 2026, colour mix: red HH, green HV, blue HH÷HV",
+      },
+    ],
+    shows: [
+      "On 13 July 2020 the rivers above Masamba, North Luwu, burst out of the hills and buried parts of the town in mud. Canada's RADARSAT Constellation Mission (RCM) imaged the area five days later for the International Charter, and the Canadian Space Agency has released that image as open data. We calibrated it and placed it with a terrain model: the product puts all ground at 1,138 m, which would have shifted the lowland about 1.6 km west. Checked against NISAR, the two now line up to within about 150 m.",
+      "Five days after the flood, 17 km² of the lowland was very dark to RCM (HH below −15 dB: smooth water or wet mud). In July 2026, NISAR saw only 3 km² that dark. Most of the dark ground seen only in 2020 lies in the rice blocks south and east of the river bend, not in Masamba town itself, where mud among buildings still echoes brightly at 30 m.",
+      "From July to October 2026, NISAR measured 6.4 km² of vegetation turning to open ground and 3.2 km² of new water in the 964 km² box, while the forested hills stayed steady (vegetation index 0.917 → 0.912). The two pictures also show a difference between products: NISAR's layer is terrain-corrected, so the hills look flat, while RCM's keeps their light and shadow.",
+    ],
+    why: [
+      "Part of the 2020 darkness is likely the flood: standing water and fresh, wet mud are smooth, so they bounce the radar away. Not all of it, though: flooded rice fields look darker in C-band than in L-band, and the crop stage in July 2020 and July 2026 differ, so this is not a flood map.",
+      "The 2026 clearing and new water fit the rice season (fields drained, ploughed and flooded again), a human driver. North Luwu's planting calendar would confirm it.",
+    ],
+    next: 'Watch the river fans and the slopes above Masamba in the next wet spells (the 2020 flood came in July): NISAR\'s movement layer can show slopes starting to creep, and its signal layer water spreading on the plain. In Orbit Lens, open Masamba, turn on Signal quality, then press "RCM 2020" to swipe between the two radars.',
+  },
 ]
 
 export const BANDS = [
@@ -319,3 +381,44 @@ export const CAPABILITIES: {
     inApp: "Not covered",
   },
 ]
+
+/** NASA learning material on radar and NISAR, from the Space Apps resource list. */
+export const LEARN: { title: string; by: string; url: string; text: string }[] =
+  [
+    {
+      title: "What is synthetic aperture radar?",
+      by: "NASA Earthdata",
+      url: "https://www.earthdata.nasa.gov/learn/earth-observation-data-basics/sar",
+      text: "Wavelength, polarization and how radar bounces off water, trees and buildings.",
+    },
+    {
+      title: "Remote sensing basics",
+      by: "NASA Earthdata",
+      url: "https://www.earthdata.nasa.gov/learn/earth-observation-data-basics/remote-sensing",
+      text: "How satellites measure the Earth, and what resolution means.",
+    },
+    {
+      title: "NISAR StoryMaps",
+      by: "NASA JPL",
+      url: "https://nisar.jpl.nasa.gov/applications/arcgis-storymaps/",
+      text: "Radar stories on floods, wildfires, sinking ground, oil slicks and glaciers.",
+    },
+    {
+      title: "NISAR applications white papers",
+      by: "NASA JPL",
+      url: "https://nisar.jpl.nasa.gov/applications/societal-benefit/",
+      text: "Two-page overviews of how NISAR helps farming, disasters, forests and more.",
+    },
+    {
+      title: "NISAR Data User Guide",
+      by: "Alaska Satellite Facility",
+      url: "https://nisar-docs.asf.alaska.edu/",
+      text: "The NISAR products Orbit Lens reads (GUNW, GCOV) and how to get them.",
+    },
+    {
+      title: "ARSET trainings",
+      by: "NASA Applied Sciences",
+      url: "https://appliedsciences.nasa.gov/get-involved/training",
+      text: "Free online courses on radar, NISAR, disasters and farming, in English and Spanish.",
+    },
+  ]

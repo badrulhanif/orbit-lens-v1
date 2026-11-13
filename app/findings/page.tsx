@@ -7,17 +7,19 @@ import {
   CAPABILITIES,
   FINDINGS_INTRO,
   FUTURE,
+  LEARN,
   LIMITS,
   POLARIZATION_GUIDE,
   STORIES,
   type Story,
 } from "@/lib/findings"
+import { RCM_CREDIT } from "@/lib/rcm"
 import { toSearch } from "@/lib/share"
 
 export const metadata: Metadata = {
   title: "Findings · Orbit Lens",
   description:
-    "What NASA-ISRO NISAR radar shows over Malaysia: paddy cycles in Kedah, Kelantan before the monsoon and ground movement in the Klang Valley.",
+    "What NASA-ISRO NISAR radar shows over Malaysia: paddy cycles in Kedah, Kelantan before the monsoon and ground movement in the Klang Valley, plus a 2020 flash flood in Masamba, Indonesia, seen by Canada's RCM.",
 }
 
 export default function FindingsPage() {
@@ -148,10 +150,46 @@ export default function FindingsPage() {
           </ul>
         </section>
 
+        <section className="grid gap-3">
+          <h2 className="text-xl font-semibold">Learn more about radar</h2>
+          <ul className="grid gap-2 sm:grid-cols-2">
+            {LEARN.map((l) => (
+              <li key={l.url}>
+                <a
+                  href={l.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="grid h-full gap-0.5 rounded-xl p-3 ring-1 ring-foreground/10 hover:bg-muted/60"
+                >
+                  <span className="flex items-center gap-1.5 font-medium">
+                    {l.title}
+                    <ExternalLinkIcon className="size-3.5 shrink-0 text-muted-foreground" />
+                  </span>
+                  <span className="text-xs text-muted-foreground">{l.by}</span>
+                  <span className="text-sm text-muted-foreground">
+                    {l.text}
+                  </span>
+                </a>
+              </li>
+            ))}
+          </ul>
+        </section>
+
         <footer className="border-t pt-4 text-xs leading-relaxed text-muted-foreground">
           NISAR data: NASA/JPL-Caltech and ISRO, via the Alaska Satellite
           Facility DAAC. Sentinel-1: ESA Copernicus, processed by NASA OPERA.
-          Population: WorldPop. Measured with Orbit Lens (open source, MIT).
+          Population: WorldPop. RADARSAT Constellation Mission Imagery ©
+          Government of Canada (2020); RADARSAT is an official mark of the
+          Canadian Space Agency (open data,{" "}
+          <a
+            href={RCM_CREDIT.licence}
+            target="_blank"
+            rel="noreferrer"
+            className="underline underline-offset-2 hover:text-foreground"
+          >
+            licence
+          </a>
+          ). Measured with Orbit Lens (open source, MIT).
         </footer>
       </div>
     </main>

@@ -21,7 +21,7 @@ and Orbit Lens shows:
 | **Measured change**        | Read straight from the full NISAR HDF5 products (only the tiles over the area): land cover in km² on two dates (water, vegetation, open, built-up), what changed, and ground movement in mm with weather and ionosphere corrections.                                                                                    |
 | **Polarizations**          | The same pass in HH, HV and a colour mix, plus how HH and HV each changed, with what each one is good at.                                                                                                                                                                                                               |
 | **"Likely why"**           | Hypotheses for each change, from which polarization moved and how: monsoon flooding, flooded paddy, water under the forest canopy (L-band double bounce), clearing and replanting, wetter soil, sinking ground.                                                                                                         |
-| **L-band vs C-band**       | Sentinel-1 (C-band, NASA OPERA) beside NISAR (L-band) on a nearby date, in a swipe view.                                                                                                                                                                                                                                |
+| **L-band vs C-band**       | Sentinel-1 (C-band, NASA OPERA) beside NISAR (L-band) on a nearby date, in a swipe view. Over Masamba, Indonesia, Canada's RCM (C-band, 2020 flash flood) too.                                                                                                                                                          |
 | **Compare**                | Any two dates side by side, with a swipe handle.                                                                                                                                                                                                                                                                        |
 | **Context**                | Recorded hazards (USGS, GDACS, NASA EONET, Wikipedia), relief centres open now and weather warnings (Malaysia), population (WorldPop).                                                                                                                                                                                  |
 | **Radar change notices**   | Watch a place and pick "Radar changes": after each new NISAR pass, Orbit Lens tells you if vegetation was cleared (or burnt, checked against NASA FIRMS fire hotspots), new water appeared, or the ground kept moving beyond twice its uncertainty. Always marked unconfirmed; never sent to authorities automatically. |
@@ -33,7 +33,7 @@ and Orbit Lens shows:
 | -------------------------------------------------------------------- | --------------------------------------------------------------------------------------------------------------------------------- |
 | An interactive app using NISAR to track and visualize surface change | Web map with NISAR GUNW and GCOV layers, measured change, time-lapse                                                              |
 | One or more kinds of change                                          | Floods and wetlands, forest and plantations, agriculture (paddy), ground movement, landslides                                     |
-| Different polarizations / frequencies                                | HH, HV, colour mix and per-polarization change; Sentinel-1 C-band beside NISAR L-band                                             |
+| Different polarizations / frequencies                                | HH, HV, colour mix and per-polarization change; Sentinel-1 and RCM (CSA) C-band beside NISAR L-band                               |
 | Time series                                                          | Every 12-day cycle, playable; movement trend over up to 8 cycles                                                                  |
 | Ancillary data                                                       | Hazard records, population, boundaries, satellite imagery base map                                                                |
 | Hypothesize the physical drivers                                     | "Likely why" on every measurement, citing the radar evidence                                                                      |
@@ -70,16 +70,39 @@ Browser (Next.js, MapLibre)
 - _Polarizations:_ median HH and HV, and their change where cover stayed the
   same (flooding under canopy, canopy thinning, soil moisture).
 
+**RCM processing (scripts/rcm/masamba.py)**
+
+One open RCM image from the Canadian Space Agency (Masamba, Indonesia,
+18 Jul 2020, International Charter call 763): DN calibrated to sigma0 with the
+product's LUT, 3x3 averaged, and placed with its tie points. The tie points sit
+on a fixed 1,138 m surface, which would shift the lowland about 1.6 km; the
+script removes that shift with a terrain model. Checked against NISAR GCOV
+(phase correlation of HH), the two line up to within about 150 m.
+
 ## Data
 
 NISAR (NASA-ISRO, via ASF DAAC), NASA GIBS, Sentinel-1 (ESA Copernicus,
-NASA OPERA RTC-S1), NASA FIRMS, USGS, GDACS, NASA EONET, Wikipedia/Wikidata, JKM
+NASA OPERA RTC-S1), RCM (Canadian Space Agency), NASA FIRMS, USGS, GDACS, NASA EONET, Wikipedia/Wikidata, JKM
 InfoBencana, MetMalaysia (data.gov.my), WorldPop, GeoNames, OpenStreetMap,
 Natural Earth, CARTO, Esri, OpenFreeMap. Full list with licences: the
 "About the data" panel in the app (`lib/data-sources.ts`).
 
 Public NISAR science products over Malaysia start in mid-2026; the app shows
 whatever the archive has.
+
+**Challenge resources used:** ASF Data Search Vertex (NISAR passes and
+products), NASA Earthdata Search / CMR (Sentinel-1 OPERA RTC-S1 dates; Earthdata
+login for NISAR downloads), the NISAR Data User Guide (GUNW and GCOV product
+layout), and NASA's intro pages on remote sensing and SAR. From the partner agencies:
+the Canadian Space Agency's RCM open data (Masamba, Indonesia, 2020). SAOCOM
+(CONAE) and RADARSAT-1 were checked too, but their open archives don't cover
+our area. The `/findings` page
+links these, plus the NISAR StoryMaps, NISAR applications white papers and
+ARSET trainings, for readers who want to learn more.
+
+RADARSAT Constellation Mission Imagery © Government of Canada (2020).
+RADARSAT is an official mark of the Canadian Space Agency.
+([RCM licence](https://donnees-data.asc-csa.gc.ca/users/OpenData_DonneesOuvertes/pub/RCM/license.pdf))
 
 ## Run it locally
 

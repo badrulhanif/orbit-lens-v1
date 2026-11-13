@@ -22,8 +22,27 @@ const KLANG_VALLEY: Place = {
   bbox: [101.35, 2.85, 101.85, 3.3],
 }
 
+/** Masamba, North Luwu (South Sulawesi): Canada's RCM imaged it after the
+ * July 2020 flash flood (see lib/rcm.ts). */
+const MASAMBA: Place = {
+  id: "case-masamba",
+  name: "Masamba, Indonesia",
+  kind: "Town",
+  icon: "area",
+  area: "North Luwu, South Sulawesi, Indonesia",
+  address: "",
+  latitude: -2.547,
+  longitude: 120.326,
+  bbox: [120.12, -2.7, 120.4, -2.42],
+}
+
+const FIXED: Record<string, Place> = {
+  "Klang Valley": KLANG_VALLEY,
+  "Masamba, Indonesia": MASAMBA,
+}
+
 /**
- * Suggested Malaysian study areas, each opening with the matching analysis.
+ * Suggested study areas, each opening with the matching analysis.
  * These are proposed uses, not confirmed findings.
  */
 export function CaseStudies({
@@ -36,7 +55,7 @@ export function CaseStudies({
   const [busy, setBusy] = React.useState<string | null>(null)
 
   async function open(name: string, app: AppId) {
-    if (name === "Klang Valley") return onOpen(KLANG_VALLEY, app)
+    if (FIXED[name]) return onOpen(FIXED[name], app)
     setBusy(name)
     try {
       const res = await fetch(
@@ -56,14 +75,14 @@ export function CaseStudies({
 
   return (
     <section
-      aria-label="Malaysia case studies"
+      aria-label="Case studies"
       className={cn(
         "grid gap-1 rounded-2xl bg-background/90 p-2 shadow-lg ring-1 shadow-black/10 ring-foreground/10 backdrop-blur-xl",
         className
       )}
     >
       <p className="px-2 pt-1 text-[11px] font-medium tracking-wide text-muted-foreground uppercase">
-        Malaysia case studies
+        Case studies
       </p>
       {CASE_STUDIES.map((c) => {
         const Icon = APP_ICON[c.app]

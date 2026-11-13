@@ -96,7 +96,10 @@ export const APPS: AppDef[] = [
 
 export const appById = (id: AppId) => APPS.find((a) => a.id === id)!
 
-/** Suggested Malaysian study areas (proposed uses, not confirmed findings). */
+/**
+ * Suggested study areas (proposed uses, not confirmed findings): Malaysia,
+ * plus one neighbour where a partner agency's radar archive adds a past event.
+ */
 export const CASE_STUDIES: {
   place: string
   app: AppId
@@ -138,6 +141,12 @@ export const CASE_STUDIES: {
     app: "earthquake",
     data: "InSAR, coherence",
     expect: "Terrain deformation",
+  },
+  {
+    place: "Masamba, Indonesia",
+    app: "flood",
+    data: "L-band vs Canada's RCM C-band (2020)",
+    expect: "Flash flood, five years on",
   },
 ]
 
