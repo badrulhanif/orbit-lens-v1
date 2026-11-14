@@ -136,7 +136,10 @@ export function OrbitLens() {
     return null
   }, [])
 
+  const nearbyRequest = React.useRef<AbortController | null>(null)
   function pick(place: Place) {
+    // A pick wins over a "Nearby me" lookup still on its way.
+    nearbyRequest.current?.abort()
     setSelectedEventId(null)
     setFilter("all")
     setNearby((n) => (n.tried ? { ...n, tried: false } : n))
@@ -155,16 +158,26 @@ export function OrbitLens() {
     tried: false,
   })
   async function openNearby(p: LatLng) {
+    nearbyRequest.current?.abort()
+    const controller = new AbortController()
+    nearbyRequest.current = controller
     setNearby({ busy: true, error: null, tried: true })
     try {
       const res = await fetch(
-        `/api/nearby?lat=${p.latitude.toFixed(2)}&lon=${p.longitude.toFixed(2)}`
+        `/api/nearby?lat=${p.latitude.toFixed(2)}&lon=${p.longitude.toFixed(2)}`,
+        { signal: controller.signal }
       )
       const { place } = (await res.json()) as { place: Place | null }
-      if (!res.ok || !place) throw new Error()
+      if (!res.ok || !place || controller.signal.aborted) throw new Error()
       pick(place)
       setNearby({ busy: false, error: null, tried: false })
     } catch {
+      // Replaced by a newer lookup (which owns the state) or by a pick.
+      if (controller.signal.aborted) {
+        if (nearbyRequest.current === controller)
+          setNearby((n) => ({ ...n, busy: false }))
+        return
+      }
       setNearby({
         busy: false,
         error: "Couldn't find your district. Try again.",
@@ -217,7 +230,6 @@ export function OrbitLens() {
   // Compare mode: the map instance (for the swipe view) and the handle.
   const [mainMap, setMainMap] = React.useState<MapLibreMap | null>(null)
   const [split, setSplit] = React.useState(0.5)
-  // (The React Compiler memoizes this; no manual useMemo needed.)
   // Application (flood, forest…) and its change-map overlay.
   const [app, setApp] = React.useState<AppId>("flood")
   const [analysis, setAnalysis] = React.useState<AnalysisOverlay | null>(null)
@@ -236,6 +248,9 @@ export function OrbitLens() {
     // The change map reads best on the plain map, unless comparing dates.
     if (next && !nisar.compare) nisar.setLayer(null)
   }
+  // A new object each render, on purpose: `nisar` and the handlers are new
+  // every render too, so a useMemo would never hit. Nothing downstream
+  // (AreaPanel, Compare, AnalysisCard) is memoised or keys an effect on it.
   const compareControls = {
     nisar,
     split,
@@ -266,6 +281,20 @@ export function OrbitLens() {
     () => area.history.data?.events ?? [],
     [area.history.data]
   )
+  // The markers on the map. Memoised: a new array would make the map
+  // re-check every marker and redraw the hover card on every render (e.g.
+  // each hover).
+  const mapEvents = React.useMemo(
+    () =>
+      events.filter(
+        (e) =>
+          e.id === selectedEventId ||
+          (!e.live && inFilter(e.type, filter) && inPeriod(e.date, period))
+      ),
+    [events, selectedEventId, filter, period]
+  )
+  const selectedOutline =
+    events.find((e) => e.id === selectedEventId)?.outline ?? null
 
   function selectEvent(id: string | null) {
     if (!id) {
@@ -315,10 +344,14 @@ export function OrbitLens() {
   function openLink(link: string, eventId?: string) {
     const view = fromSearch(link)
     if (!view) return
-    pendingEvent.current = eventId ?? null
     pick(view.place)
-    if (eventId && events.some((e) => e.id === eventId))
+    // Its place is already open (history loaded): select it now. Otherwise
+    // once the history arrives (and only then, or reopening that place
+    // later would select it again).
+    if (eventId && events.some((e) => e.id === eventId)) {
+      pendingEvent.current = null
       Promise.resolve().then(() => selectEvent(eventId))
+    } else pendingEvent.current = eventId ?? null
   }
   const [notice, setNotice] = React.useState<string | null>(null)
 
@@ -366,20 +399,12 @@ export function OrbitLens() {
         <main className="relative h-svh w-full overflow-hidden bg-background">
           <MapCanvas
             picked={picked}
-            events={events.filter(
-              (e) =>
-                e.id === selectedEventId ||
-                (!e.live &&
-                  inFilter(e.type, filter) &&
-                  inPeriod(e.date, period))
-            )}
+            events={mapEvents}
             selectedEventId={selectedEventId}
             onSelectEvent={selectEvent}
             hoveredEventId={hoveredEventId}
             onHoverEvent={setHoveredEventId}
-            outline={
-              events.find((e) => e.id === selectedEventId)?.outline ?? null
-            }
+            outline={selectedOutline}
             sar={nisar.overlay}
             view={view}
             theme={theme}
@@ -472,25 +497,23 @@ export function OrbitLens() {
                   onClose={closeArea}
                 />
               ) : (
-                <>
-                  <CaseStudies
-                    className="min-h-0 overflow-x-hidden overflow-y-auto max-sm:hidden"
-                    onOpen={(place, nextApp) => {
-                      pick(place)
-                      chooseApp(nextApp)
-                    }}
-                  />
-                </>
+                <CaseStudies
+                  className="min-h-0 overflow-x-hidden overflow-y-auto max-sm:hidden"
+                  onOpen={(place, nextApp) => {
+                    pick(place)
+                    chooseApp(nextApp)
+                  }}
+                />
               )}
             </div>
           </aside>
 
           {/*
-        Phones: one stack along the bottom (passes, legend, controls).
-        Wider screens: the stack dissolves (`contents`) and each piece takes
-        its own spot: controls top-right, passes bottom-centre, legend
-        bottom-right.
-      */}
+            Phones: one stack along the bottom (passes, legend, controls).
+            Wider screens: the stack dissolves (`contents`) and each piece
+            takes its own spot: controls top-right, passes bottom-centre,
+            legend bottom-right.
+          */}
           <div className="pointer-events-none absolute right-14 bottom-3 left-3 z-10 flex flex-col gap-2 sm:contents">
             {radarOn && !nisar.compare && (
               <div
@@ -500,7 +523,7 @@ export function OrbitLens() {
                 <SarPassNav nisar={nisar} />
               </div>
             )}
-            {(analysis || (radarOn && nisar.layer)) && (
+            {(analysis || radarOn) && (
               <div
                 ref={legendRef}
                 className={cn(

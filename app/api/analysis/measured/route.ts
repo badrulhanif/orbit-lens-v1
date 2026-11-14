@@ -7,7 +7,7 @@ import {
   measureTrend,
 } from "@/lib/server/measured"
 import { isGranuleName } from "@/lib/server/nisar"
-import { parseBbox } from "@/lib/server/util"
+import { boundaryParam, parseBbox } from "@/lib/server/util"
 
 // Reading several full products can take a few minutes the first time.
 export const maxDuration = 300
@@ -35,7 +35,8 @@ export async function GET(request: NextRequest) {
   }
   const params = request.nextUrl.searchParams
   const box = parseBbox(params)
-  if (!box || box[2] - box[0] > 6 || box[3] - box[1] > 6) {
+  // 6° a side (measureBox caps it there; rounding can add a hair).
+  if (!box || box[2] - box[0] > 6.001 || box[3] - box[1] > 6.001) {
     return Response.json({ error: "Invalid area." }, { status: 400 })
   }
   const kind = params.get("kind")
@@ -45,8 +46,7 @@ export async function GET(request: NextRequest) {
       const a = list(params.get("a"), "GCOV", 8)
       const b = list(params.get("b"), "GCOV", 8)
       if (!a.length || !b.length) throw new RangeError()
-      const boundary = params.get("boundary")?.slice(0, 200) ?? null
-      body = await measureCover(a, b, box, boundary)
+      body = await measureCover(a, b, box, boundaryParam(params))
     } else {
       const granules = list(params.get("granules"), "GUNW", 40)
       if (!granules.length) throw new RangeError()

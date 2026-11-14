@@ -16,10 +16,12 @@ const UA = { "User-Agent": "OrbitLens/0.1 (data snapshot)" }
 const BBOX = "92,22,128,-12"
 
 const today = new Date().toISOString().slice(0, 10)
-const list = await fetch(
+const listRes = await fetch(
   `https://eonet.gsfc.nasa.gov/api/v3/events?status=all&limit=2000&category=floods&start=2000-01-01&end=${today}&bbox=${BBOX}`,
-  { headers: UA }
-).then((r) => r.json())
+  { headers: UA, signal: AbortSignal.timeout(120_000) }
+)
+if (!listRes.ok) throw new Error(`EONET: HTTP ${listRes.status}`)
+const list = await listRes.json()
 
 const ids = [
   ...new Set(
@@ -33,8 +35,7 @@ const kept = existsSync(OUT) ? JSON.parse(readFileSync(OUT, "utf8")) : {}
 const recent = new Date(Date.now() - 30 * 86400_000).toISOString().slice(0, 10)
 const todo = ids.filter(
   (id) =>
-    !(id in kept) ||
-    (kept[id] && (kept[id].properties?.todate ?? "") >= recent)
+    !(id in kept) || (kept[id] && (kept[id].properties?.todate ?? "") >= recent)
 )
 console.log(`${ids.length} events, ${todo.length} to fetch`)
 
@@ -68,7 +69,9 @@ async function get(id) {
         },
       }
     } catch (error) {
-      console.warn(`  ${id}: ${error.message}${attempt < 2 ? ", retrying" : ""}`)
+      console.warn(
+        `  ${id}: ${error.message}${attempt < 2 ? ", retrying" : ""}`
+      )
     }
   }
   return null

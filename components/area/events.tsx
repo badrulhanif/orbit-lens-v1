@@ -14,6 +14,7 @@ import {
   WavesIcon,
 } from "lucide-react"
 
+import { magnitude } from "@/components/area/report-doc"
 import { DataInfoButton } from "@/components/data-info"
 import { Tip } from "@/components/tip"
 import {
@@ -145,7 +146,9 @@ function EventRow({
         )}
       </span>
       {stateWide ? (
-        <ExternalLinkIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        event.url && (
+          <ExternalLinkIcon className="size-3.5 shrink-0 text-muted-foreground" />
+        )
       ) : (
         <ChevronLeftIcon className="size-4 shrink-0 rotate-180 text-muted-foreground" />
       )}
@@ -156,7 +159,15 @@ function EventRow({
     isHovered && "border-foreground/30 bg-muted/60"
   )
 
-  // State-wide records have no spot to open; link to their article instead.
+  // State-wide records have no spot to open; link to their article instead
+  // (or, with no article, just show the record).
+  if (stateWide && !event.url) {
+    return (
+      <div ref={ref as React.RefObject<HTMLDivElement>} className={className}>
+        {body}
+      </div>
+    )
+  }
   if (stateWide) {
     return (
       <a
@@ -225,8 +236,7 @@ function severity(e: HistoryEvent) {
   const people = (e.impacts ?? [])
     .filter((i) => !i.kind.includes("house"))
     .reduce((n, i) => n + i.value, 0)
-  const mag = Number(e.title.match(/^M([\d.]+)/)?.[1] ?? 0)
-  return [people, mag] as const
+  return [people, magnitude(e)] as const
 }
 
 export function sortEvents(events: HistoryEvent[], key: SortKey) {

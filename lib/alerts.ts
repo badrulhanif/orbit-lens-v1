@@ -39,7 +39,7 @@ export const TOPICS = [
   { id: "radar", label: "Radar changes (NISAR, every 12 days)" },
 ] as const
 export type Topic = (typeof TOPICS)[number]["id"]
-export const ALL_TOPICS: Topic[] = TOPICS.map((t) => t.id)
+const ALL_TOPICS: Topic[] = TOPICS.map((t) => t.id)
 
 /** Which topic an event belongs to. */
 const topicOf = (e: HistoryEvent): Topic =>

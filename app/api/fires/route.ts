@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server"
 
 import { firesBetween } from "@/lib/server/fires"
-import { parseBbox } from "@/lib/server/util"
+import { boundaryParam, parseBbox } from "@/lib/server/util"
 
 export const maxDuration = 60
 
@@ -15,14 +15,10 @@ export async function GET(request: NextRequest) {
   const box = parseBbox(params)
   const from = params.get("from") ?? ""
   const to = params.get("to") ?? ""
-  if (!box || from > to)
+  // Same size limit as /api/area-history, which the fallback reads.
+  if (!box || box[2] - box[0] > 25 || box[3] - box[1] > 25 || from > to)
     return Response.json({ error: "Invalid area or dates." }, { status: 400 })
-  const fires = await firesBetween(
-    box,
-    from,
-    to,
-    params.get("boundary")?.slice(0, 200) ?? null
-  )
+  const fires = await firesBetween(box, from, to, boundaryParam(params))
   return Response.json(
     { fires },
     {

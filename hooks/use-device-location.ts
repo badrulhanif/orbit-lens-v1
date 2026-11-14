@@ -85,10 +85,13 @@ export function useDeviceLocation() {
   // Already allowed for this site: read it quietly (it ranks search
   // results). Otherwise wait until the user asks.
   React.useEffect(() => {
+    let cancelled = false
     let permission: PermissionStatus | null = null
     navigator.permissions
       ?.query({ name: "geolocation" })
       .then((p) => {
+        // Unmounted before the browser answered: don't start listening.
+        if (cancelled) return
         permission = p
         if (p.state === "granted") {
           setAllowed(true)
@@ -104,6 +107,7 @@ export function useDeviceLocation() {
         // Permissions API not available: ask when needed.
       })
     return () => {
+      cancelled = true
       if (permission) permission.onchange = null
     }
   }, [locate])

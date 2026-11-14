@@ -44,7 +44,26 @@ test("period filter keeps recent dates and drops undated ones", () => {
 test("dates show only what's known", () => {
   expect(formatEventDate("2021-12")).toBe("Dec 2021")
   expect(formatEventDate("2021-12-16")).toBe("16 Dec 2021")
+  expect(formatEventDate("2008")).toBe("2008")
   expect(formatEventDate(null)).toBe("Date unknown")
+})
+
+test("area boxes stay on the globe near the antimeridian", async () => {
+  const { areaBoxFor } = await import("@/lib/area")
+  const [w, s, e, n] = areaBoxFor({
+    id: "p",
+    name: "Taveuni",
+    kind: "Island",
+    icon: "pin",
+    area: "Fiji",
+    address: "",
+    latitude: -16.8,
+    longitude: 179.98,
+    bbox: null,
+  })
+  expect(e).toBe(180)
+  expect(w).toBeLessThan(179.98)
+  expect(s).toBeLessThan(n)
 })
 
 test("location precision labels", () => {
@@ -362,4 +381,21 @@ test("radar notices: baseline first, then only real changes, marked unconfirmed"
     box
   )
   expect(moving.alerts[0].title).toMatch(/^Ground moving/)
+  expect(moving.alerts[0].detail).toMatch(/-28 to \+23 mm/)
+  // An area that only sank: no "+-" in the range.
+  const sinking = radarUpdate(
+    { trend: 31 },
+    {
+      trend: {
+        cycle: 32,
+        result: {
+          ...trend,
+          uncertainty: 5,
+          total: { p5: -60, p95: -2, moving: 0.4, threshold: 20 },
+        },
+      },
+    },
+    box
+  )
+  expect(sinking.alerts[0].detail).toMatch(/-60 to -2 mm/)
 })

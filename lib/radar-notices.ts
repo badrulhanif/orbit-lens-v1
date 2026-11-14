@@ -1,6 +1,12 @@
 import type { Alert, RadarState } from "@/lib/alerts"
 import { formatEventDate, type Bbox } from "@/lib/area"
-import { movementDrivers, type CoverResult, type FireInfo } from "@/lib/drivers"
+import {
+  km2,
+  movementDrivers,
+  signed,
+  type CoverResult,
+  type FireInfo,
+} from "@/lib/drivers"
 
 /**
  * Radar change notices for watched places. NISAR passes every 12 days, too
@@ -31,9 +37,6 @@ export type RadarLatest = {
   trend?: { cycle: number; result: TrendResult | "none" | null }
 }
 
-const km2 = (v: number) =>
-  `${v >= 100 ? Math.round(v).toLocaleString("en-GB") : v.toFixed(1)} km²`
-
 const UNCONFIRMED =
   "Unconfirmed: check on the ground before reporting it to anyone."
 
@@ -42,7 +45,7 @@ const UNCONFIRMED =
 const worthTelling = (v: number, measured: number) =>
   v >= 1 && v >= measured * 0.005
 
-export function coverNotices(c: CoverResult, fires?: FireInfo | null): Alert[] {
+function coverNotices(c: CoverResult, fires?: FireInfo | null): Alert[] {
   const span = `NISAR, ${formatEventDate(c.a.date)} → ${formatEventDate(c.b.date)}`
   const out: Alert[] = []
   if (worthTelling(c.vegLost, c.measured)) {
@@ -69,7 +72,7 @@ export function coverNotices(c: CoverResult, fires?: FireInfo | null): Alert[] {
   return out
 }
 
-export function trendNotices(t: TrendResult, bbox: Bbox): Alert[] {
+function trendNotices(t: TrendResult, bbox: Bbox): Alert[] {
   const s = t.rate ?? t.total
   if (!t.available || !s || !t.to) return []
   const unit = t.rate ? "mm/yr" : "mm"
@@ -82,7 +85,7 @@ export function trendNotices(t: TrendResult, bbox: Bbox): Alert[] {
       id: `radar-move-${t.to}`,
       kind: "radar",
       title: `Ground moving: ${Math.round(s.moving * 100)}% of the area beyond ${s.threshold} ${unit}`,
-      detail: `NISAR, ${t.pairs} pairs to ${formatEventDate(t.to)}: ${s.p5.toFixed(0)} to +${s.p95.toFixed(0)} ${unit}${t.uncertainty != null ? ` (±${t.uncertainty})` : ""}. On a slope this can be creep before a landslide; on flat ground, sinking. ${UNCONFIRMED}`,
+      detail: `NISAR, ${t.pairs} pairs to ${formatEventDate(t.to)}: ${signed(s.p5, 0)} to ${signed(s.p95, 0)} ${unit}${t.uncertainty != null ? ` (±${t.uncertainty})` : ""}. On a slope this can be creep before a landslide; on flat ground, sinking. ${UNCONFIRMED}`,
     },
   ]
 }

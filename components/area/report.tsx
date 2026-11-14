@@ -10,6 +10,7 @@ import {
 } from "lucide-react"
 
 import { Loading } from "@/components/area/ui"
+import { useCopy } from "@/components/share-button"
 import {
   toHtml,
   toMarkdown,
@@ -35,21 +36,15 @@ export function Report({
   /** Controls for what the report covers (period). */
   scope?: React.ReactNode
 }) {
-  const [copied, setCopied] = React.useState(false)
+  const { copied, copy } = useCopy()
   if (loading) return <Loading>Putting the report together…</Loading>
 
-  async function copy() {
-    try {
-      await navigator.clipboard.writeText(toMarkdown(doc))
-      setCopied(true)
-      setTimeout(() => setCopied(false), 1500)
-    } catch {
-      // Clipboard blocked.
-    }
-  }
-
   const buttons: [string, React.ReactNode, () => void, boolean?][] = [
-    [copied ? "Copied" : "Copy", copied ? <CheckIcon /> : <CopyIcon />, copy],
+    [
+      copied ? "Copied" : "Copy",
+      copied ? <CheckIcon /> : <CopyIcon />,
+      () => copy(toMarkdown(doc)),
+    ],
     ["Print / PDF", <PrinterIcon key="p" />, () => print(toHtml(doc))],
     [
       "Markdown",
@@ -84,9 +79,11 @@ export function Report({
         </div>
       )}
       <div className="flex flex-wrap gap-1.5">
-        {buttons.map(([label, icon, onClick, disabled]) => (
+        {buttons.map(([label, icon, onClick, disabled], i) => (
           <Button
-            key={label}
+            // By position: "Copy" becomes "Copied", and a new key would
+            // remount the button and drop keyboard focus.
+            key={i}
             variant="outline"
             size="sm"
             className="h-8"
@@ -125,8 +122,9 @@ function ReportView({ doc }: { doc: ReportDoc }) {
               <p key={i}>{b.text}</p>
             ) : b.kind === "list" ? (
               <ul key={i} className="grid list-disc gap-1 pl-4">
-                {b.items.map((item) => (
-                  <li key={item}>{item}</li>
+                {/* Items can repeat (e.g. two identical warnings). */}
+                {b.items.map((item, j) => (
+                  <li key={j}>{item}</li>
                 ))}
               </ul>
             ) : b.kind === "table" ? (
@@ -318,4 +316,9 @@ function download(name: string, text: string, type: string) {
   setTimeout(() => URL.revokeObjectURL(url), 1000)
 }
 
-export const slug = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, "-")
+/** File-name-safe: "Banjir Kelantan (2014)" → "banjir-kelantan-2014". */
+export const slug = (s: string) =>
+  s
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "") || "report"

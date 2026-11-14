@@ -1,6 +1,6 @@
 import type { NextRequest } from "next/server"
 
-import { loadSharp, TtlCache } from "@/lib/server/util"
+import { isDay, loadSharp, TtlCache } from "@/lib/server/util"
 
 /**
  * NISAR backscatter map tiles from NASA GIBS, through our server:
@@ -50,8 +50,8 @@ async function download(date: string, z: number, x: number, y: number) {
  * Checked in 32×32 patches; one bad patch flags the tile.
  */
 async function looksCorrupt(png: Buffer) {
-  const sharp = await loadSharp()
   if (png.length < 1000) return false // the genuine blank tile
+  const sharp = await loadSharp()
   const { data, info } = await sharp(png)
     .ensureAlpha()
     .raw()
@@ -101,10 +101,10 @@ async function looksCorrupt(png: Buffer) {
 
 /** The matching quarter of the parent tile, scaled up. */
 async function fromParent(date: string, z: number, x: number, y: number) {
-  const sharp = await loadSharp()
   if (z <= 1) return null
   const parent = await tile(date, z - 1, x >> 1, y >> 1, true)
   if (!parent || parent.length < 1000) return parent
+  const sharp = await loadSharp()
   const meta = await sharp(parent).metadata()
   const half = Math.floor((meta.width ?? 256) / 2)
   return sharp(parent)
@@ -144,17 +144,20 @@ export async function GET(
   _request: NextRequest,
   ctx: RouteContext<"/api/sar/tiles/[date]/[z]/[x]/[y]">
 ) {
-  const { date, z, x, y } = await ctx.params
+  const params = await ctx.params
+  const [z, x, y] = [params.z, params.x, params.y].map(Number)
   if (
-    !/^\d{4}-\d{2}-\d{2}$/.test(date) ||
-    ![z, x, y].every((v) => /^\d{1,6}$/.test(v)) ||
-    Number(z) > 13
+    !isDay(params.date) ||
+    ![params.z, params.x, params.y].every((v) => /^\d{1,6}$/.test(v)) ||
+    z > 13 ||
+    // Off the edge of the world at this zoom: not a real tile, and each
+    // one would otherwise cost several GIBS requests.
+    x >= 2 ** z ||
+    y >= 2 ** z
   ) {
     return new Response("Invalid tile", { status: 400 })
   }
-  const png = await tile(date, Number(z), Number(x), Number(y)).catch(
-    () => null
-  )
+  const png = await tile(params.date, z, x, y).catch(() => null)
   return new Response(new Uint8Array(png ?? EMPTY), {
     headers: {
       "Content-Type": "image/png",

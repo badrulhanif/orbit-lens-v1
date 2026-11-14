@@ -156,7 +156,8 @@
   [role="option"],
   [role="radio"],
   [role="tab"],
-  [role="combobox"],
+  /* Not the search box: a text field keeps its text cursor. */
+  [role="combobox"]:not(input),
   [role="menuitem"],
   summary,
   label[for],

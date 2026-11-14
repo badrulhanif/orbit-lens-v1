@@ -56,15 +56,19 @@ export function CaseStudies({
 
   async function open(name: string, app: AppId) {
     if (FIXED[name]) return onOpen(FIXED[name], app)
+    // One search at a time: a second click would open two places.
+    if (busy) return
     setBusy(name)
     try {
       const res = await fetch(
         `/api/search?q=${encodeURIComponent(name)}&submit=1`
       )
-      const data = (await res.json().catch(() => null)) as SearchResponse | null
+      const data = res.ok
+        ? ((await res.json().catch(() => null)) as SearchResponse | null)
+        : null
       const place =
-        data?.places.find((p) => p.kind === "State" && p.name === name) ??
-        data?.places[0]
+        data?.places?.find((p) => p.kind === "State" && p.name === name) ??
+        data?.places?.[0]
       if (place) onOpen(place, app)
     } catch {
       // Search unreachable: nothing to open.
@@ -91,6 +95,7 @@ export function CaseStudies({
             key={c.place}
             type="button"
             onClick={() => open(c.place, c.app)}
+            aria-busy={busy === c.place}
             className="flex w-full items-center gap-3 rounded-lg px-2 py-1.5 text-left hover:bg-muted"
           >
             <span className="grid size-8 shrink-0 place-items-center rounded-lg bg-orange-500/10 text-orange-700 dark:text-orange-400">

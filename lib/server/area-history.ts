@@ -165,9 +165,7 @@ async function refineFromWikipedia(events: HistoryEvent[]) {
     (e) => e.approximate && e.url?.startsWith("https://en.wikipedia.org/wiki/")
   )
   if (!rough.length) return
-  const titles = rough.map((e) =>
-    decodeURIComponent(e.url!.split("/wiki/")[1]).replace(/_/g, " ")
-  )
+  const titles = rough.map((e) => wikiTitle(e.url) ?? "")
   const url = new URL("https://en.wikipedia.org/w/api.php")
   url.search = new URLSearchParams({
     action: "query",

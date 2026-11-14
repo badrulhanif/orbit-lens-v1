@@ -18,10 +18,12 @@ If NISAR_WORKER_KEY is set, requests must send it as the X-Worker-Key header.
 
 from __future__ import annotations
 
+import hmac
 import json
 import os
 import threading
 import time
+import traceback
 from collections import OrderedDict
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import parse_qs, urlparse
@@ -46,14 +48,20 @@ import reader  # noqa: E402  (reads the token from the environment)
 KEY = os.environ.get("NISAR_WORKER_KEY", "")
 PORT = int(os.environ.get("PORT", "8787"))
 
-# Finished answers, newest last (products don't change once published).
-_results: OrderedDict[str, tuple[float, dict]] = OrderedDict()
+# Finished answers as JSON bytes, newest last (products don't change once
+# published). Bounded by count and by size: cover answers carry six
+# base64 PNGs, so 300 of them could fill a small instance's memory.
+_results: OrderedDict[str, tuple[float, bytes]] = OrderedDict()
+_results_bytes = 0
 _inflight: dict[str, threading.Event] = {}
 _lock = threading.Lock()
 TTL = 24 * 3600
+MAX_RESULTS = 300
+MAX_RESULT_BYTES = 150 << 20
 
 
-def cached(key: str, make):
+def cached(key: str, make) -> bytes:
+    global _results_bytes
     with _lock:
         hit = _results.get(key)
         if hit and time.time() - hit[0] < TTL:
@@ -66,32 +74,77 @@ def cached(key: str, make):
         waiting.wait(300)
         return cached(key, make)
     try:
-        value = make()
+        value = json.dumps(make()).encode()
         with _lock:
+            old = _results.pop(key, None)
+            if old:
+                _results_bytes -= len(old[1])
             _results[key] = (time.time(), value)
-            while len(_results) > 300:
-                _results.popitem(last=False)
+            _results_bytes += len(value)
+            while len(_results) > MAX_RESULTS or (
+                _results_bytes > MAX_RESULT_BYTES and len(_results) > 1
+            ):
+                _, (_, dropped) = _results.popitem(last=False)
+                _results_bytes -= len(dropped)
         return value
     finally:
         with _lock:
             _inflight.pop(key).set()
 
 
+# 6° a side, plus a little: callers round 6°-wide boxes to 4 decimals,
+# which can come out at 6.0001.
+MAX_SIDE = 6.001
+
+
 def parse_bbox(text: str) -> list[float]:
-    w, s, e, n = (float(v) for v in text.split(","))
-    if not (-180 <= w < e <= 180 and -90 <= s < n <= 90) or e - w > 6 or n - s > 6:
+    w, s, e, n = (round(float(v), 4) for v in text.split(","))
+    if (
+        not (-180 <= w < e <= 180 and -90 <= s < n <= 90)
+        or e - w > MAX_SIDE
+        or n - s > MAX_SIDE
+    ):
         raise ValueError("bbox must be w,s,e,n and at most 6° a side")
-    return [round(v, 4) for v in (w, s, e, n)]
+    return [w, s, e, n]
+
+
+def _urls(text: str | None, limit: int) -> list[str]:
+    return [reader.check_url(u) for u in (text or "").split(",") if u][:limit]
+
+
+def job(path: str, q: dict[str, str]):
+    """(cache key, computation) for a request; ValueError when it's malformed."""
+    bbox = parse_bbox(q.get("bbox", ""))
+    urls = _urls(q.get("urls") or q.get("url"), 40)
+    if path == "/measure":
+        if not urls:
+            raise ValueError("Need a product URL")
+        return f"m|{','.join(sorted(urls))}|{bbox}", lambda: reader.measure(urls, bbox)
+    if path == "/cover":
+        a = _urls(q.get("a"), 8)
+        b = _urls(q.get("b"), 8)
+        if not a or not b:
+            raise ValueError("Need products for both dates")
+        boundary = q.get("boundary") or None
+        key = f"c|{','.join(sorted(a))}|{','.join(sorted(b))}|{bbox}|{boundary}"
+        return key, lambda: reader.cover(a, b, bbox, boundary)
+    if len(urls) < 2:  # /rate
+        raise ValueError("Need at least two pairs")
+    return f"r|{','.join(sorted(urls))}|{bbox}", lambda: reader.rate(urls, bbox)
 
 
 class Handler(BaseHTTPRequestHandler):
-    def _send(self, status: int, body: dict):
-        data = json.dumps(body).encode()
-        self.send_response(status)
-        self.send_header("Content-Type", "application/json")
-        self.send_header("Content-Length", str(len(data)))
-        self.end_headers()
-        self.wfile.write(data)
+    def _send(self, status: int, body: dict | bytes):
+        data = body if isinstance(body, bytes) else json.dumps(body).encode()
+        try:
+            self.send_response(status)
+            self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
+        except (BrokenPipeError, ConnectionResetError):
+            # The caller gave up waiting; the answer is cached for next time.
+            self.log_message("client went away before the answer (%d)", status)
 
     def do_GET(self):  # noqa: N802
         url = urlparse(self.path)
@@ -102,44 +155,24 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(
                 200, {"ok": True, "token": bool(reader.TOKEN), "commit": commit}
             )
-        if KEY and self.headers.get("X-Worker-Key") != KEY:
+        given = self.headers.get("X-Worker-Key") or ""
+        if KEY and not hmac.compare_digest(given.encode(), KEY.encode()):
             return self._send(401, {"error": "Unauthorised"})
+        if url.path not in ("/measure", "/rate", "/cover"):
+            return self._send(404, {"error": "Not found"})
         try:
-            bbox = parse_bbox(q.get("bbox", ""))
-            urls = [
-                reader.check_url(u)
-                for u in (q.get("urls") or q.get("url") or "").split(",")
-                if u
-            ][:40]
-            if url.path == "/measure":
-                if not urls:
-                    raise ValueError("Need a product URL")
-                key = f"m|{','.join(sorted(urls))}|{bbox}"
-                body = cached(key, lambda: reader.measure(urls, bbox))
-            elif url.path == "/cover":
-                a = [reader.check_url(u) for u in q.get("a", "").split(",") if u][:8]
-                b = [reader.check_url(u) for u in q.get("b", "").split(",") if u][:8]
-                if not a or not b:
-                    raise ValueError("Need products for both dates")
-                boundary = q.get("boundary") or None
-                key = f"c|{','.join(sorted(a))}|{','.join(sorted(b))}|{bbox}|{boundary}"
-                body = cached(key, lambda: reader.cover(a, b, bbox, boundary))
-            elif url.path == "/rate":
-                if len(urls) < 2:
-                    raise ValueError("Need at least two pairs")
-                key = f"r|{','.join(sorted(urls))}|{bbox}"
-                body = cached(key, lambda: reader.rate(urls, bbox))
-            else:
-                return self._send(404, {"error": "Not found"})
-            return self._send(200, body)
+            key, make = job(url.path, q)
         except ValueError as e:
             return self._send(400, {"error": str(e)})
+        try:
+            body = cached(key, make)
         except Exception as e:  # noqa: BLE001
-            import traceback
-
+            # Internal errors (numpy's included, many of which are
+            # ValueErrors) are the service's fault, not the caller's.
             traceback.print_exc()
             self.log_error("failed: %r", e)
             return self._send(502, {"error": "Couldn't read the NISAR product."})
+        return self._send(200, body)
 
     def log_message(self, fmt, *args):
         print(

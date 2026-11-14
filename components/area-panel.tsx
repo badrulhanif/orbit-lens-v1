@@ -85,25 +85,29 @@ export function AreaPanel({
   place,
   area,
   hoveredEventId = null,
-  onHoverEvent = () => {},
+  onHoverEvent = noop,
   compare,
   selectedEventId,
   onSelectEvent,
   onClose,
   className,
 }: AreaPanelProps) {
-  const events = area.history.data?.events ?? []
+  const events = area.history.data?.events ?? NO_EVENTS
   const selected = events.find((e) => e.id === selectedEventId) ?? null
   // Phones: the card can fold down to its header to show the map.
   const [folded, setFolded] = React.useState(false)
+  const hover = React.useMemo(
+    () => ({ hovered: hoveredEventId, setHovered: onHoverEvent }),
+    [hoveredEventId, onHoverEvent]
+  )
+  const fold = React.useMemo(
+    () => ({ folded, toggle: () => setFolded((f) => !f) }),
+    [folded]
+  )
 
   return (
-    <HoverContext.Provider
-      value={{ hovered: hoveredEventId, setHovered: onHoverEvent }}
-    >
-      <FoldContext.Provider
-        value={{ folded, toggle: () => setFolded((f) => !f) }}
-      >
+    <HoverContext.Provider value={hover}>
+      <FoldContext.Provider value={fold}>
         <section
           aria-label={`${place.name} details`}
           data-folded={folded}
@@ -139,6 +143,9 @@ export function AreaPanel({
   )
 }
 
+const noop = () => {}
+const NO_EVENTS: HistoryEvent[] = []
+
 function AreaView({
   place,
   area,
@@ -160,30 +167,44 @@ function AreaView({
   // Start reading the measured movement now, so it's ready when a movement
   // hazard (subsidence, landslide, earthquake) is picked.
   const movement = area.radar.data?.movement
-  const prefetch =
-    area.bbox && movement
-      ? measuredPairUrl(movement.cycles, analysisBox(area.bbox))
-      : null
+  const prefetch = React.useMemo(
+    () =>
+      area.bbox && movement
+        ? measuredPairUrl(movement.cycles, analysisBox(area.bbox))
+        : null,
+    [area.bbox, movement]
+  )
   React.useEffect(() => {
+    // Fire and forget: only warms the measurement service's cache.
     if (prefetch) fetch(prefetch).catch(() => {})
   }, [prefetch])
 
   // Open relief centres are "now" (the strip and the map), not history.
   // Events at sea within the state's waters are listed (and counted) apart.
-  const live = events.filter((e) => e.live)
-  const history = events.filter((e) => !e.live)
-  const onshore = history.filter((e) => !e.offshore)
-  const offshore = history.filter((e) => e.offshore)
-  const counts = area.history.data
-    ? (Object.fromEntries(
-        (["all", ...APPS.map((a) => a.id)] as HazardFilter[]).map((f) => [
-          f,
-          history.filter(
-            (e) => inFilter(e.type, f) && inPeriod(e.date, compare.period)
-          ).length,
-        ])
-      ) as Record<HazardFilter, number>)
-    : null
+  const { live, history, onshore, offshore } = React.useMemo(() => {
+    const history = events.filter((e) => !e.live)
+    return {
+      live: events.filter((e) => e.live),
+      history,
+      onshore: history.filter((e) => !e.offshore),
+      offshore: history.filter((e) => e.offshore),
+    }
+  }, [events])
+  const loaded = !!area.history.data
+  const counts = React.useMemo(
+    () =>
+      loaded
+        ? (Object.fromEntries(
+            (["all", ...APPS.map((a) => a.id)] as HazardFilter[]).map((f) => [
+              f,
+              history.filter(
+                (e) => inFilter(e.type, f) && inPeriod(e.date, compare.period)
+              ).length,
+            ])
+          ) as Record<HazardFilter, number>)
+        : null,
+    [loaded, history, compare.period]
+  )
 
   return (
     <>
@@ -205,14 +226,7 @@ function AreaView({
         <WatchButton place={place} history={area.history.data} />
         <ShareButton />
         <FoldButton />
-        <Button
-          variant="outline"
-          size="icon-sm"
-          aria-label="Close area"
-          onClick={onClose}
-        >
-          <XIcon />
-        </Button>
+        <CloseButton onClose={onClose} />
       </header>
       <div className={FOLDS}>
         <AppPicker
@@ -352,12 +366,26 @@ function AreaOverview({
   const features = useFeatures()
   const cycles = radar.data?.movement?.cycles.length ?? 0
   // Stats, list and map all follow the hazard filter.
-  const pass = (e: HistoryEvent) =>
-    inFilter(e.type, filter) && inPeriod(e.date, period)
-  const inArea = onshore.filter(pass)
-  const shown = sortEvents(inArea, sort)
-  const atSea = sortEvents(offshore.filter(pass), sort)
-  const byDate = sortEvents(inArea, "newest")
+  const { inArea, byDate } = React.useMemo(() => {
+    const inArea = onshore.filter(
+      (e) => inFilter(e.type, filter) && inPeriod(e.date, period)
+    )
+    return { inArea, byDate: sortEvents(inArea, "newest") }
+  }, [onshore, filter, period])
+  const shown = React.useMemo(
+    () => (sort === "newest" ? byDate : sortEvents(inArea, sort)),
+    [inArea, byDate, sort]
+  )
+  const atSea = React.useMemo(
+    () =>
+      sortEvents(
+        offshore.filter(
+          (e) => inFilter(e.type, filter) && inPeriod(e.date, period)
+        ),
+        sort
+      ),
+    [offshore, filter, period, sort]
+  )
   const earliest = byDate
     .filter((e) => e.date)
     .at(-1)
@@ -540,13 +568,17 @@ function SpotView({
   const color = HAZARD_COLOR[event.type]
 
   // Other records within ~15 km.
-  const near = areaEvents
-    .filter((e) => e.id !== event.id)
-    .map((e) => ({ e, d: km(e, event) }))
-    .filter(({ d }) => d < 15)
-    .sort((a, b) => a.d - b.d)
-    .slice(0, 5)
-    .map(({ e }) => e)
+  const near = React.useMemo(
+    () =>
+      areaEvents
+        .filter((e) => e.id !== event.id)
+        .map((e) => ({ e, d: km(e, event) }))
+        .filter(({ d }) => d < 15)
+        .sort((a, b) => a.d - b.d)
+        .slice(0, 5)
+        .map(({ e }) => e),
+    [areaEvents, event]
+  )
 
   return (
     <>
@@ -563,14 +595,7 @@ function SpotView({
           <div className="flex gap-1.5">
             <ShareButton />
             <FoldButton />
-            <Button
-              variant="outline"
-              size="icon-sm"
-              aria-label="Close area"
-              onClick={onClose}
-            >
-              <XIcon />
-            </Button>
+            <CloseButton onClose={onClose} />
           </div>
         </div>
         <div className="flex items-start gap-3">
@@ -603,26 +628,24 @@ function SpotView({
         )}
       >
         {tab === "overview" && (
-          <>
-            <SpotOverview
-              event={event}
-              areaName={areaName}
-              spot={spot}
-              near={near}
-              onSelectEvent={onSelectEvent}
-              onCompare={() => setTab("compare")}
-              analysis={
-                <AnalysisCard
-                  app={SPOT_APP[event.type] ?? compare.app}
-                  area={spot}
-                  events={[event]}
-                  eventDate={event.date}
-                  overlay={compare.overlay}
-                  onOverlay={compare.onOverlay}
-                />
-              }
-            />
-          </>
+          <SpotOverview
+            event={event}
+            areaName={areaName}
+            spot={spot}
+            near={near}
+            onSelectEvent={onSelectEvent}
+            onCompare={() => setTab("compare")}
+            analysis={
+              <AnalysisCard
+                app={SPOT_APP[event.type] ?? compare.app}
+                area={spot}
+                events={[event]}
+                eventDate={event.date}
+                overlay={compare.overlay}
+                onOverlay={compare.onOverlay}
+              />
+            }
+          />
         )}
         {tab === "compare" && (
           <Compare bbox={spot.bbox} around={event.date} controls={compare} />
@@ -696,20 +719,19 @@ function SpotOverview({
                 : areaName
           }
         />
-        <div className="col-span-2">
-          <Field
-            label="Coordinates"
-            value={`${event.latitude.toFixed(4)}, ${event.longitude.toFixed(4)}`}
-          />
-        </div>
+        <Field
+          className="col-span-2"
+          label="Coordinates"
+          value={`${event.latitude.toFixed(4)}, ${event.longitude.toFixed(4)}`}
+        />
         {event.detail && (
-          <div className="col-span-2">
-            <Field label="Detail" value={event.detail} />
-          </div>
+          <Field className="col-span-2" label="Detail" value={event.detail} />
         )}
-        <div className="col-span-2">
-          <Field label="Location precision" value={precisionOf(event).hint} />
-        </div>
+        <Field
+          className="col-span-2"
+          label="Location precision"
+          value={precisionOf(event).hint}
+        />
         {event.url && (
           <a
             href={event.url}
@@ -841,6 +863,19 @@ const FoldContext = React.createContext<{
   folded: boolean
   toggle: () => void
 }>({ folded: false, toggle: () => {} })
+
+function CloseButton({ onClose }: { onClose: () => void }) {
+  return (
+    <Button
+      variant="outline"
+      size="icon-sm"
+      aria-label="Close area"
+      onClick={onClose}
+    >
+      <XIcon />
+    </Button>
+  )
+}
 
 /** Phones: fold the card to its header (to see the map), or open it again. */
 function FoldButton() {

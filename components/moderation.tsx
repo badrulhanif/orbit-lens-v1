@@ -26,6 +26,8 @@ export function Moderation() {
   const [key, setKey] = React.useState("")
   const [reports, setReports] = React.useState<Report[] | null>(null)
   const [error, setError] = React.useState<string | null>(null)
+  // The report being approved/rejected (its buttons wait meanwhile).
+  const [deciding, setDeciding] = React.useState<string | null>(null)
 
   async function load(k = key) {
     setError(null)
@@ -66,13 +68,17 @@ export function Moderation() {
   }, [])
 
   async function decide(id: string, status: "approved" | "rejected") {
+    setDeciding(id)
     const res = await fetch("/api/reports/moderate", {
       method: "POST",
       headers: { "Content-Type": "application/json", "X-Moderator-Key": key },
       body: JSON.stringify({ id, status }),
     }).catch(() => null)
-    if (res?.ok) setReports((r) => r?.filter((x) => x.id !== id) ?? null)
-    else setError("Couldn't save that decision.")
+    setDeciding(null)
+    if (res?.ok) {
+      setError(null)
+      setReports((r) => r?.filter((x) => x.id !== id) ?? null)
+    } else setError("Couldn't save that decision.")
   }
 
   return (
@@ -140,13 +146,18 @@ export function Moderation() {
             {r.precise ? "GPS" : "area only"})
           </a>
           <div className="flex gap-2">
-            <Button size="sm" onClick={() => decide(r.id, "approved")}>
+            <Button
+              size="sm"
+              disabled={deciding === r.id}
+              onClick={() => decide(r.id, "approved")}
+            >
               <CheckIcon data-icon="inline-start" />
               Approve
             </Button>
             <Button
               size="sm"
               variant="outline"
+              disabled={deciding === r.id}
               onClick={() => decide(r.id, "rejected")}
             >
               <XIcon data-icon="inline-start" />

@@ -315,6 +315,7 @@ export function WatchButton({
   const [open, setOpen] = React.useState(false)
   const topics = w.topicsOf(place)
   const f = useEmailSignup(placeLink(place), topics)
+  const emailId = React.useId()
   const label = on
     ? `Watching ${place.name}`
     : w.full
@@ -400,12 +401,12 @@ export function WatchButton({
             </p>
           ) : (
             <form onSubmit={f.submit} className="grid gap-1.5">
-              <label htmlFor="watch-email" className="font-medium">
+              <label htmlFor={emailId} className="font-medium">
                 Also email me
               </label>
               <div className="flex gap-1.5">
                 <input
-                  id="watch-email"
+                  id={emailId}
                   type="email"
                   required
                   value={f.email}
@@ -449,5 +450,3 @@ export function WatchButton({
     </Popover>
   )
 }
-
-export { placeLink }

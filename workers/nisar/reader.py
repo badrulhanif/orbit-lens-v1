@@ -12,6 +12,7 @@ fetched, in parallel, with HTTP range requests.
 
 from __future__ import annotations
 
+import base64
 import json
 import math
 import os
@@ -20,12 +21,17 @@ import struct
 import threading
 import time
 import zlib
+from collections import OrderedDict
 from concurrent.futures import ThreadPoolExecutor
+from functools import lru_cache
+from io import BytesIO
 
+import aiohttp
 import fsspec
 import h5py
 import numpy as np
 import requests
+from PIL import Image
 from pyproj import Transformer
 
 TOKEN = os.environ.get("EARTHDATA_TOKEN", "")
@@ -59,11 +65,14 @@ PRODUCTS = {
 
 def product(url: str) -> str:
     return "GCOV" if "_GCOV_" in url else "GUNW"
+
+
 # Read whole when the area in a frame is at most this (pixels, ~80 m each:
 # about 80 km a side); bigger areas are sampled in patches.
 MAX_WINDOW = 1024
 # Pixels below this coherence are too noisy to measure.
 RELIABLE = 0.4
+SPEED_OF_LIGHT = 299_792_458.0  # m/s
 
 pool = ThreadPoolExecutor(24)  # tile downloads
 pairs_pool = ThreadPoolExecutor(8)  # whole pairs (each uses `pool`)
@@ -76,6 +85,17 @@ def _session() -> requests.Session:
     return _local.s
 
 
+# One lock per key (product URL, terrain area): threads asking for the same
+# thing wait for the first instead of downloading it again.
+_locks: dict[str, threading.Lock] = {}
+_locks_guard = threading.Lock()
+
+
+def _lock_for(key: str) -> threading.Lock:
+    with _locks_guard:
+        return _locks.setdefault(key, threading.Lock())
+
+
 def check_url(url: str) -> str:
     if not ALLOWED.match(url):
         raise ValueError("Not a NISAR product URL")
@@ -86,80 +106,116 @@ def check_url(url: str) -> str:
 # Access: a signed download link (reused ~45 min) and per-product metadata.
 
 _signed: dict[str, tuple[str, float]] = {}
+SIGNED_FOR = 45 * 60  # s
 
 
 def signed_url(url: str) -> str:
     hit = _signed.get(url)
     if hit and hit[1] > time.time():
         return hit[0]
-    r = _session().get(
-        url,
-        headers={"Authorization": f"Bearer {TOKEN}", "Range": "bytes=0-0"},
-        allow_redirects=False,
-        timeout=30,
-    )
-    if r.status_code not in (301, 302, 303, 307, 308):
-        raise RuntimeError(f"NISAR archive answered {r.status_code}")
-    _signed[url] = (r.headers["Location"], time.time() + 45 * 60)
-    return _signed[url][0]
+    with _lock_for("signed|" + url):
+        hit = _signed.get(url)
+        if hit and hit[1] > time.time():
+            return hit[0]
+        r = _session().get(
+            url,
+            headers={"Authorization": f"Bearer {TOKEN}", "Range": "bytes=0-0"},
+            allow_redirects=False,
+            timeout=30,
+        )
+        r.close()
+        if r.status_code not in (301, 302, 303, 307, 308):
+            raise RuntimeError(f"NISAR archive answered {r.status_code}")
+        now = time.time()
+        # Drop expired links so the table doesn't grow forever.
+        for k in [k for k, (_, until) in list(_signed.items()) if until <= now]:
+            _signed.pop(k, None)
+        _signed[url] = (r.headers["Location"], now + SIGNED_FOR)
+        return _signed[url][0]
 
 
 _meta: dict[str, dict] = {}
-_meta_lock = threading.Lock()
+# Per read (not the whole request): a stalled connection fails instead of
+# holding a worker thread for minutes.
+_HTTP_TIMEOUT = aiohttp.ClientTimeout(total=300, sock_connect=30, sock_read=60)
 
 
 def metadata(url: str) -> dict:
-    with _meta_lock:
-        if url in _meta:
-            return _meta[url]
-    path = os.path.join(CACHE_DIR, url.rsplit("/", 1)[-1] + ".json")
-    if os.path.exists(path):
-        with open(path) as fh:
-            m = json.load(fh)
-    else:
-        f = fsspec.filesystem("https").open(
-            signed_url(url), "rb", block_size=8 << 20, cache_type="blockcache"
-        )
-        grid, layers, freq = PRODUCTS[product(url)]
-        with h5py.File(f, "r") as h:
-            if grid not in h:
-                raise RuntimeError("Product has no 80 m layer to read")
-            g = h[grid]
-            x = g["xCoordinates"]
-            y = g["yCoordinates"]
-            m = {
-                "epsg": int(g["projection"].attrs["epsg_code"]),
-                "x0": float(x[0]),
-                "dx": float(x[1] - x[0]),
-                "y0": float(y[0]),
-                "dy": float(y[1] - y[0]),
-                "shape": list(g[next(iter(layers.values()))].shape),
-                "frequency": float(h[freq][()]) if freq else None,
-                "layers": {},
-            }
-            for name, p in layers.items():
-                # Some GCOV frames are single-polarization (HH only).
-                if p not in g:
-                    continue
-                d = g[p]
-                tiles = {}
-                for i in range(d.id.get_num_chunks()):
-                    info = d.id.get_chunk_info(i)
-                    tiles[f"{info.chunk_offset[0]},{info.chunk_offset[1]}"] = [
-                        int(info.byte_offset),
-                        int(info.size),
-                        int(info.filter_mask),
-                    ]
-                m["layers"][name] = {
-                    "dtype": d.dtype.str,
-                    "chunk": list(d.chunks),
-                    "tiles": tiles,
-                }
-        os.makedirs(CACHE_DIR, exist_ok=True)
-        with open(path, "w") as fh:
-            json.dump(m, fh)
-    with _meta_lock:
+    """Grid, projection and where each tile sits in the file: read once per
+    product, then kept in memory and in CACHE_DIR."""
+    m = _meta.get(url)
+    if m:
+        return m
+    with _lock_for("meta|" + url):
+        m = _meta.get(url)
+        if m:
+            return m
+        path = os.path.join(CACHE_DIR, url.rsplit("/", 1)[-1] + ".json")
+        m = _read_cached(path)
+        if m is None:
+            m = _read_metadata(url)
+            _write_cached(path, m)
         _meta[url] = m
+        return m
+
+
+def _read_cached(path: str) -> dict | None:
+    try:
+        with open(path) as fh:
+            return json.load(fh)
+    except (OSError, ValueError):  # missing, or corrupt: read it again
+        return None
+
+
+def _write_cached(path: str, m: dict) -> None:
+    """Write then rename, so a crash never leaves a half-written file."""
+    os.makedirs(CACHE_DIR, exist_ok=True)
+    tmp = f"{path}.{os.getpid()}.{threading.get_ident()}.tmp"
+    with open(tmp, "w") as fh:
+        json.dump(m, fh)
+    os.replace(tmp, path)
+
+
+def _read_metadata(url: str) -> dict:
+    grid, layers, freq = PRODUCTS[product(url)]
+    fs = fsspec.filesystem("https", client_kwargs={"timeout": _HTTP_TIMEOUT})
+    with (
+        fs.open(signed_url(url), "rb", block_size=8 << 20, cache_type="blockcache") as f,
+        h5py.File(f, "r") as h,
+    ):
+        if grid not in h:
+            raise RuntimeError("Product has no 80 m layer to read")
+        g = h[grid]
+        x = g["xCoordinates"]
+        y = g["yCoordinates"]
+        m = {
+            "epsg": int(g["projection"].attrs["epsg_code"]),
+            "x0": float(x[0]),
+            "dx": float(x[1] - x[0]),
+            "y0": float(y[0]),
+            "dy": float(y[1] - y[0]),
+            "shape": list(g[next(iter(layers.values()))].shape),
+            "frequency": float(h[freq][()]) if freq else None,
+            "layers": {},
+        }
+        for name, p in layers.items():
+            # Some GCOV frames are single-polarization (HH only).
+            if p not in g:
+                continue
+            d = g[p]
+            tiles = {}
+            for i in range(d.id.get_num_chunks()):
+                info = d.id.get_chunk_info(i)
+                tiles[f"{info.chunk_offset[0]},{info.chunk_offset[1]}"] = [
+                    int(info.byte_offset),
+                    int(info.size),
+                    int(info.filter_mask),
+                ]
+            m["layers"][name] = {
+                "dtype": d.dtype.str,
+                "chunk": list(d.chunks),
+                "tiles": tiles,
+            }
     return m
 
 
@@ -177,14 +233,19 @@ def _tile(url: str, layer: dict, key: str) -> np.ndarray | None:
             r = _session().get(
                 signed_url(url),
                 headers={"Range": f"bytes={off}-{off + size - 1}"},
-                timeout=60,
+                timeout=(15, 60),
             )
+            if r.status_code == 403:  # the signed link expired: sign again
+                _signed.pop(url, None)
             r.raise_for_status()
             raw = r.content
+            if len(raw) != size:
+                raise requests.RequestException(f"Got {len(raw)} of {size} bytes")
             break
         except requests.RequestException:
             if attempt == 2:
                 raise
+            time.sleep(0.5 * 2**attempt)
     dt = np.dtype(layer["dtype"])
     # Filters: 0 = shuffle, 1 = deflate (a set mask bit means "skipped").
     if not mask & 0b10:
@@ -248,6 +309,11 @@ def window_for(m: dict, bbox: list[float]):
     x, y = _tr(m["epsg"]).transform(gx.ravel(), gy.ravel())
     cols = (np.asarray(x) - m["x0"]) / m["dx"]
     rows = (np.asarray(y) - m["y0"]) / m["dy"]
+    # Points the frame's projection can't place come back as inf.
+    ok = np.isfinite(rows) & np.isfinite(cols)
+    if not ok.any():
+        return None
+    rows, cols = rows[ok], cols[ok]
     r0, r1 = int(np.floor(rows.min())), int(np.ceil(rows.max()))
     c0, c1 = int(np.floor(cols.min())), int(np.ceil(cols.max()))
     # The part of the box this frame covers.
@@ -290,18 +356,37 @@ def windows_for(m: dict, bbox: list[float]):
     return out, True
 
 
-def to_lonlat_grid(m, rows, cols, values, bbox, size=400):
-    """Resample a window onto a regular lon/lat grid over bbox (nearest)."""
+def pixel_centres(bbox: list[float], shape: tuple[int, int]):
+    """Longitudes and latitudes of the output grid's pixel centres (rows run
+    north to south)."""
+    w, s, e, n = bbox
+    H, W = shape
+    lons = w + (np.arange(W) + 0.5) * (e - w) / W
+    lats = n - (np.arange(H) + 0.5) * (n - s) / H
+    return lons, lats
+
+
+@lru_cache(maxsize=8)
+def _projected_grid(epsg: int, bbox: tuple[float, ...], size: int):
+    """The output lon/lat grid in a frame's projection (shared by every
+    window and product in that projection over the same area)."""
     w, s, e, n = bbox
     aspect = (e - w) * math.cos(math.radians((s + n) / 2)) / max(n - s, 1e-9)
     W = size if aspect >= 1 else max(8, int(size * aspect))
     H = size if aspect < 1 else max(8, int(size / aspect))
-    lons = w + (np.arange(W) + 0.5) * (e - w) / W
-    lats = n - (np.arange(H) + 0.5) * (n - s) / H
-    gx, gy = np.meshgrid(lons, lats)
-    x, y = _tr(m["epsg"]).transform(gx.ravel(), gy.ravel())
-    c = np.round((np.asarray(x) - m["x0"]) / m["dx"]).astype(int) - cols[0]
-    r = np.round((np.asarray(y) - m["y0"]) / m["dy"]).astype(int) - rows[0]
+    gx, gy = np.meshgrid(*pixel_centres(list(bbox), (H, W)))
+    x, y = _tr(epsg).transform(gx.ravel(), gy.ravel())
+    x, y = np.asarray(x), np.asarray(y)
+    x.flags.writeable = y.flags.writeable = False
+    return (H, W), x, y
+
+
+def to_lonlat_grid(m, rows, cols, values, bbox, size=400):
+    """Resample a window onto a regular lon/lat grid over bbox (nearest)."""
+    (H, W), x, y = _projected_grid(m["epsg"], tuple(bbox), size)
+    with np.errstate(invalid="ignore"):
+        c = np.round((x - m["x0"]) / m["dx"]).astype(int) - cols[0]
+        r = np.round((y - m["y0"]) / m["dy"]).astype(int) - rows[0]
     inside = (r >= 0) & (r < values.shape[0]) & (c >= 0) & (c < values.shape[1])
     out = np.full(H * W, np.nan, np.float32)
     out[inside] = values[r[inside], c[inside]]
@@ -360,7 +445,7 @@ def _window_mm(url, m, rows, cols):
     # coherence): report its coherence, but no movement figures.
     if good.sum() < 50:
         good = np.zeros_like(valid)
-    lam = 299_792_458.0 / m["frequency"]
+    lam = SPEED_OF_LIGHT / m["frequency"]
     # Take out the broad tilt across the area (atmosphere and orbit errors
     # show up as a gentle ramp), then measure relative to the median.
     corr = corr - _ramp(corr, good)
@@ -389,7 +474,8 @@ def _ramp(values: np.ndarray, good: np.ndarray) -> np.ndarray:
     r, c = r[::step], c[::step]
     A = np.column_stack([np.ones(r.size), r, c])
     coef, *_ = np.linalg.lstsq(A, values[r, c], rcond=None)
-    rr, cc = np.mgrid[0 : values.shape[0], 0 : values.shape[1]]
+    rr = np.arange(values.shape[0])[:, None]
+    cc = np.arange(values.shape[1])[None, :]
     return coef[0] + coef[1] * rr + coef[2] * cc
 
 
@@ -414,19 +500,34 @@ def _stats(values: np.ndarray, threshold: float):
 # --------------------------------------------------------------------------
 # Corrections and combining frames (the core of MintPy-style processing).
 
-_dem: dict[str, np.ndarray] = {}
+# Terrain grids by area: (expires, grid). A failed download (None) is
+# remembered for a few minutes so the pairs of one request don't each wait
+# on it again.
+_dem: OrderedDict[str, tuple[float, np.ndarray | None]] = OrderedDict()
+_dem_lock = threading.Lock()
+DEM_KEEP = 32  # areas (~0.6 MB each at 400 px)
+DEM_RETRY = 5 * 60  # s
 
 
 def dem_grid(bbox: list[float], shape: tuple[int, int]) -> np.ndarray | None:
     """Terrain height (m) on the output lon/lat grid, from the free AWS
-    terrain tiles (Terrarium PNGs)."""
-    from io import BytesIO
+    terrain tiles (Terrarium PNGs). None when they can't be reached."""
+    key = f"{bbox}|{tuple(shape)}"
+    with _lock_for("dem|" + key):
+        with _dem_lock:
+            hit = _dem.get(key)
+        if hit and hit[0] > time.time():
+            return hit[1]
+        out = _fetch_dem(bbox, shape)
+        with _dem_lock:
+            _dem[key] = (math.inf if out is not None else time.time() + DEM_RETRY, out)
+            _dem.move_to_end(key)
+            while len(_dem) > DEM_KEEP:
+                _dem.popitem(last=False)
+        return out
 
-    from PIL import Image
 
-    key = f"{bbox}|{shape}"
-    if key in _dem:
-        return _dem[key]
+def _fetch_dem(bbox: list[float], shape: tuple[int, int]) -> np.ndarray | None:
     w, s, e, n = bbox
     H, W = shape
     z = int(np.clip(math.ceil(math.log2(360 * W / (256 * (e - w)))), 3, 12))
@@ -438,10 +539,11 @@ def dem_grid(bbox: list[float], shape: tuple[int, int]) -> np.ndarray | None:
         return x, y
 
     while True:
+        last = 2**z - 1  # e = 180 or lat beyond ±85° would ask for no tile
         x0, y0 = tile_xy(w, n, z)
         x1, y1 = tile_xy(e, s, z)
-        tx = range(int(x0), int(x1) + 1)
-        ty = range(int(y0), int(y1) + 1)
+        tx = range(max(0, int(x0)), min(last, int(x1)) + 1)
+        ty = range(max(0, int(y0)), min(last, int(y1)) + 1)
         if len(tx) * len(ty) <= 36 or z <= 3:
             break
         z -= 1
@@ -451,7 +553,8 @@ def dem_grid(bbox: list[float], shape: tuple[int, int]) -> np.ndarray | None:
         url = f"https://s3.amazonaws.com/elevation-tiles-prod/terrarium/{z}/{x}/{y}.png"
         r = _session().get(url, timeout=30)
         r.raise_for_status()
-        a = np.asarray(Image.open(BytesIO(r.content)).convert("RGB"), np.float32)
+        with Image.open(BytesIO(r.content)) as im:
+            a = np.asarray(im.convert("RGB"), np.float32)
         return t, a[..., 0] * 256 + a[..., 1] + a[..., 2] / 256 - 32768
 
     try:
@@ -461,15 +564,11 @@ def dem_grid(bbox: list[float], shape: tuple[int, int]) -> np.ndarray | None:
     mosaic = np.zeros((len(ty) * 256, len(tx) * 256), np.float32)
     for (x, y), a in tiles.items():
         mosaic[(y - ty[0]) * 256 : (y - ty[0] + 1) * 256, (x - tx[0]) * 256 : (x - tx[0] + 1) * 256] = a
-    lons = w + (np.arange(W) + 0.5) * (e - w) / W
-    lats = n - (np.arange(H) + 0.5) * (n - s) / H
-    gx, gy = np.meshgrid(lons, lats)
+    gx, gy = np.meshgrid(*pixel_centres(bbox, (H, W)))
     px, py = tile_xy(gx, gy, z)
     c = np.clip(((px - tx[0]) * 256).astype(int), 0, mosaic.shape[1] - 1)
     r = np.clip(((py - ty[0]) * 256).astype(int), 0, mosaic.shape[0] - 1)
-    out = np.maximum(mosaic[r, c], 0)
-    _dem[key] = out
-    return out
+    return np.maximum(mosaic[r, c], 0)
 
 
 def tropo_correct(grid: np.ndarray, dem: np.ndarray | None) -> np.ndarray:
@@ -502,7 +601,7 @@ def _pair_grid(url: str, bbox: list[float]):
     if np.isfinite(g).sum() < 50:
         return None
     g -= np.nanmedian(g)
-    return {**res, "grid": g, "lam": 299_792_458.0 / res["frequency"]}
+    return {**res, "grid": g, "lam": SPEED_OF_LIGHT / res["frequency"]}
 
 
 def _mosaic(grids: list[np.ndarray]) -> np.ndarray:
@@ -541,15 +640,17 @@ def measure(urls: list[str], bbox: list[float]):
     }
 
 
-def _frame_trend(urls: list[str], bbox: list[float]):
-    """Movement over time for one frame, from its pairs (MintPy-style):
-    stacked rate, temporal coherence and uncertainty per pixel."""
+def _frame_trend(read: list[tuple[str, dict | None]]):
+    """Movement over time for one frame, from its pairs ((url, _pair_grid)
+    each), MintPy-style: stacked rate, temporal coherence and uncertainty
+    per pixel."""
     pairs = []
-    for u, p in zip(urls, pairs_pool.map(lambda u: _pair_grid(u, bbox), urls)):
+    for u, p in read:
         ref, sec = pair_dates(u)
         if p and ref:
             span = int((np.datetime64(sec) - np.datetime64(ref)).astype(int))
-            pairs.append((ref, sec, span, p))
+            if span > 0:
+                pairs.append((ref, sec, span, p))
     if len(pairs) < 2:
         return None
     pairs.sort(key=lambda t: t[0])
@@ -566,11 +667,13 @@ def _frame_trend(urls: list[str], bbox: list[float]):
     resid = np.where(valid, G - v[None] / 365.25 * dt, 0)
     phase = resid / 1000 * 4 * math.pi / lam
     tcoh = np.abs(np.where(valid, np.exp(1j * phase), 0).sum(0)) / np.maximum(n, 1)
-    # Uncertainty of the rate: spread of the pair rates over sqrt(n).
-    rates = np.where(valid, G / dt * 365.25, np.nan)
-    with np.errstate(invalid="ignore"):
-        sigma = np.nanstd(rates, 0) / np.sqrt(np.maximum(n, 1))
-    ok = (n >= max(2, len(pairs) // 2)) & (tcoh >= 0.7)
+    # Uncertainty of the rate: spread of the pair rates over sqrt(n)
+    # (the standard deviation over each pixel's valid pairs).
+    rates = np.where(valid, G / dt * 365.25, 0)
+    count = np.maximum(n, 1)
+    spread = np.where(valid, rates - rates.sum(0) / count, 0)
+    sigma = np.sqrt((spread**2).sum(0) / count) / np.sqrt(count)
+    ok =(n >= max(2, len(pairs) // 2)) & (tcoh >= 0.7)
     return {
         "from": pairs[0][0],
         "to": pairs[-1][1],
@@ -587,10 +690,13 @@ def rate(urls: list[str], bbox: list[float]):
     movement, and the yearly rate once there's 6 months of data."""
     for u in urls:
         check_url(u)
-    frames: dict[str, list[str]] = {}
-    for u in urls:
-        frames.setdefault(frame_key(u), []).append(u)
-    trends = [t for t in (_frame_trend(us, bbox) for us in frames.values()) if t]
+    # Every pair of every frame read together (the pool stays busy), then
+    # grouped by frame.
+    read = list(zip(urls, pairs_pool.map(lambda u: _pair_grid(u, bbox), urls)))
+    frames: dict[str, list[tuple[str, dict | None]]] = {}
+    for u, p in read:
+        frames.setdefault(frame_key(u), []).append((u, p))
+    trends = [t for t in (_frame_trend(f) for f in frames.values()) if t]
     if not trends:
         return {"available": False, "reason": "No usable radar pairs over this area."}
     start = min(t["from"] for t in trends)
@@ -668,7 +774,7 @@ def raster_mask(rings, bbox, shape) -> np.ndarray:
     w, s, e, n = bbox
     H, W = shape
     mask = np.zeros(shape, np.uint8)
-    lats = n - (np.arange(H) + 0.5) * (n - s) / H
+    _, lats = pixel_centres(bbox, shape)
     for ring in rings:
         r = np.asarray(ring, float)
         if r[:, 0].max() < w or r[:, 0].min() > e or r[:, 1].max() < s or r[:, 1].min() > n:
@@ -710,18 +816,20 @@ SWATH_EDGE = 25
 
 def _erode(valid: np.ndarray, k: int) -> np.ndarray:
     """Shrink the valid area by k pixels from its edges with no data. The
-    window's own border isn't a swath edge, so it isn't shrunk."""
+    window's own border isn't a swath edge, so it isn't shrunk.
+
+    A pixel stays valid when every pixel within k of it along its row and
+    along its column is valid (counted with running sums of the gaps)."""
     out = valid.copy()
     for axis in (0, 1):
-        for step in range(1, k + 1):
-            for sign in (1, -1):
-                shifted = np.roll(valid, sign * step, axis=axis)
-                edge = slice(0, step) if sign > 0 else slice(-step, None)
-                if axis == 0:
-                    shifted[edge, :] = True
-                else:
-                    shifted[:, edge] = True
-                out &= shifted
+        size = valid.shape[axis]
+        pad = [(0, 0), (0, 0)]
+        pad[axis] = (k + 1, k)  # outside the window counts as valid
+        gaps = np.cumsum(np.pad(~valid, pad), axis=axis, dtype=np.int32)
+        if axis == 0:
+            out &= gaps[2 * k + 1 :, :] == gaps[:size, :]
+        else:
+            out &= gaps[:, 2 * k + 1 :] == gaps[:, :size]
     return out
 
 
@@ -778,9 +886,11 @@ def cover(a_urls: list[str], b_urls: list[str], bbox: list[float], boundary=None
     changed, measured from the full backscatter product."""
     for u in a_urls + b_urls:
         check_url(u)
+    # Both dates' frames read together (the pool stays busy).
+    read = list(pairs_pool.map(lambda u: _backscatter(u, bbox), a_urls + b_urls))
     dates = []
-    for urls in (a_urls, b_urls):
-        parts = [p for p in pairs_pool.map(lambda u: _backscatter(u, bbox), urls) if p]
+    for urls, got in ((a_urls, read[: len(a_urls)]), (b_urls, read[len(a_urls) :])):
+        parts = [p for p in got if p]
         if not parts:
             return {"available": False, "reason": "No usable radar data over this area."}
         dates.append(
@@ -952,10 +1062,11 @@ def png_data_url(values: np.ndarray, limit: float) -> str:
 
 
 def _png(rgba: np.ndarray) -> str:
-    import base64
-
     h, w = rgba.shape[:2]
-    raw = b"".join(b"\x00" + rgba[y].tobytes() for y in range(h))
+    # Each row: filter type 0 (none), then its RGBA bytes.
+    rows = np.zeros((h, 1 + w * 4), np.uint8)
+    rows[:, 1:] = rgba.reshape(h, w * 4)
+    raw = rows.tobytes()
 
     def chunk(kind: bytes, data: bytes) -> bytes:
         return (

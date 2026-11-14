@@ -16,7 +16,7 @@ import { useJson } from "@/hooks/use-json"
 import { areaQuery, formatEventDate, type Bbox } from "@/lib/area"
 import { movementDrivers } from "@/lib/drivers"
 import { granuleIds, measureBox, movementGranules } from "@/lib/measure-plan"
-import type { SarCycle } from "@/lib/sar"
+import type { SarCycle, SarPass } from "@/lib/sar"
 
 /**
  * Measured ground movement from the full NISAR products (via the Python
@@ -70,7 +70,10 @@ const mm = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)}`
 
 /** The request for the latest pair (also used to fetch it ahead of time). */
 export function measuredPairUrl(cycles: SarCycle[], bbox: Bbox) {
-  const { latest } = movementGranules(cycles, bbox)
+  return pairUrl(movementGranules(cycles, bbox).latest, bbox)
+}
+
+function pairUrl(latest: SarPass[], bbox: Bbox) {
   return latest.length
     ? `/api/analysis/measured?kind=pair&granules=${granuleIds(latest)}&${areaQuery(measureBox(bbox))}`
     : null
@@ -94,16 +97,17 @@ export function Measured({
   /** Plain-text results, for the report. */
   onLines?: (lines: string[]) => void
 }) {
-  const box = measureBox(bbox)
-  const where = areaQuery(box)
-  const { latest, trend: stack } = movementGranules(cycles, bbox)
+  const { latest, trend: stack } = React.useMemo(
+    () => movementGranules(cycles, bbox),
+    [cycles, bbox]
+  )
   const pairs = new Set(stack.map((p) => p.cycle)).size
 
-  const pair = useJson<Pair>(measuredPairUrl(cycles, bbox))
+  const pair = useJson<Pair>(pairUrl(latest, bbox))
   const [wantTrend, setWantTrend] = React.useState(false)
   const trend = useJson<Trend>(
     wantTrend && pairs > 1
-      ? `/api/analysis/measured?kind=trend&granules=${granuleIds(stack)}&${where}`
+      ? `/api/analysis/measured?kind=trend&granules=${granuleIds(stack)}&${areaQuery(measureBox(bbox))}`
       : null
   )
 
@@ -145,11 +149,7 @@ export function Measured({
       : undefined
 
   return (
-    <div className="grid gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2.5 text-xs">
-      <p className="flex items-center gap-1.5 font-semibold">
-        <RulerIcon className="size-3.5 text-emerald-600" />
-        Measured from full NISAR data
-      </p>
+    <MeasuredShell>
       {pair.loading ? (
         <Loading small>
           Reading the radar product… (up to 20 s the first time)
@@ -207,21 +207,10 @@ export function Measured({
               {overlay?.url === p.map ? "Hide map" : "Measured map"}
             </Button>
             {p.map && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8"
-                nativeButton={false}
-                render={
-                  <a
-                    href={p.map}
-                    download={`nisar-movement-${p.from}-${p.to}.png`}
-                  />
-                }
-              >
-                <DownloadIcon data-icon="inline-start" />
-                PNG
-              </Button>
+              <PngDownload
+                href={p.map}
+                name={`nisar-movement-${p.from}-${p.to}.png`}
+              />
             )}
             {pairs > 1 && !wantTrend && (
               <Button
@@ -257,7 +246,7 @@ export function Measured({
           </p>
         </>
       )}
-    </div>
+    </MeasuredShell>
   )
 }
 
@@ -349,6 +338,35 @@ function TrendResult({
         {overlay?.url === t.map ? "Hide map" : "Trend map"}
       </Button>
     </div>
+  )
+}
+
+/** The green "measured" box shared with the land-cover measurement. */
+export function MeasuredShell({ children }: { children: React.ReactNode }) {
+  return (
+    <div className="grid gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2.5 text-xs">
+      <p className="flex items-center gap-1.5 font-semibold">
+        <RulerIcon className="size-3.5 text-emerald-600" />
+        Measured from full NISAR data
+      </p>
+      {children}
+    </div>
+  )
+}
+
+/** Save a measured map as a PNG. */
+export function PngDownload({ href, name }: { href: string; name: string }) {
+  return (
+    <Button
+      variant="ghost"
+      size="sm"
+      className="h-8"
+      nativeButton={false}
+      render={<a href={href} download={name} />}
+    >
+      <DownloadIcon data-icon="inline-start" />
+      PNG
+    </Button>
   )
 }
 

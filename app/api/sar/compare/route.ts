@@ -1,6 +1,7 @@
 import type { NextRequest } from "next/server"
 
 import { cropSignal, darkSurfaceChange, readBbox } from "@/lib/server/sar-crop"
+import { isDay } from "@/lib/server/util"
 
 /**
  * Brightness comparison numbers for two dates over one area: how much of it
@@ -12,8 +13,7 @@ export async function GET(request: NextRequest) {
   const bbox = readBbox(params)
   const a = params.get("a") ?? ""
   const b = params.get("b") ?? ""
-  const day = /^\d{4}-\d{2}-\d{2}$/
-  if (!bbox || !day.test(a) || !day.test(b)) {
+  if (!bbox || !isDay(a) || !isDay(b)) {
     return Response.json({ error: "Invalid request." }, { status: 400 })
   }
   try {

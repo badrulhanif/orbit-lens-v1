@@ -34,6 +34,11 @@ export async function sendEmail(to: string, subject: string, html: string) {
       port: 465,
       secure: true,
       auth: { user: GMAIL_USER, pass: GMAIL_PASS },
+      // nodemailer waits minutes by default; a stuck send would hold up
+      // the whole alerts run.
+      connectionTimeout: 15_000,
+      greetingTimeout: 15_000,
+      socketTimeout: 30_000,
     })
     await gmail.sendMail({
       from: `"Orbit Lens" <${GMAIL_USER}>`,

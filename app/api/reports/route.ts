@@ -3,7 +3,7 @@ import { createHash, randomUUID } from "node:crypto"
 import { clientIp } from "@/lib/server/ip-location"
 import { REPORT_HAZARDS } from "@/lib/server/reports"
 import { count, insert, supabaseEnabled, upload } from "@/lib/server/supabase"
-import { validLatLng } from "@/lib/server/util"
+import { isDay, validLatLng } from "@/lib/server/util"
 
 const PHOTO_TYPES: Record<string, string> = {
   "image/jpeg": "jpg",
@@ -29,14 +29,17 @@ export async function POST(request: Request) {
   const description = field("description").slice(0, 600)
   const latitude = Number(field("latitude"))
   const longitude = Number(field("longitude"))
-  const occurredOn = /^\d{4}-\d{2}-\d{2}$/.test(field("occurredOn"))
-    ? field("occurredOn")
-    : null
+  const occurredOn = isDay(field("occurredOn")) ? field("occurredOn") : null
+  // Reporters are in Malaysia (UTC+8): from midnight to 8 am local, their
+  // "today" is already tomorrow in UTC.
+  const today = new Date().toLocaleDateString("en-CA", {
+    timeZone: "Asia/Kuala_Lumpur",
+  })
   if (
     !REPORT_HAZARDS.includes(hazard as (typeof REPORT_HAZARDS)[number]) ||
     description.length < 5 ||
     !validLatLng(latitude, longitude) ||
-    (occurredOn && occurredOn > new Date().toISOString().slice(0, 10))
+    (occurredOn && occurredOn > today)
   )
     return Response.json({ error: "Please check the report." }, { status: 400 })
 

@@ -113,7 +113,7 @@ const MAX_PASSES_PER_CYCLE = 14
  * Every NISAR swath overlapping an area, grouped by 12-day cycle so they
  * can be stitched into one picture. Newest cycle first.
  */
-export async function findCoverage(
+async function findCoverage(
   layer: SarLayer,
   [w, s, e, n]: SarPass["bbox"],
   centre: { latitude: number; longitude: number }
@@ -233,14 +233,16 @@ async function buildScene(granule: string): Promise<LoadedScene> {
   const browseUrl = result.browse.find((u) => u.endsWith("_LATLON.png"))
   if (!browseUrl) throw new Error("No browse image")
 
-  const res = await fetch(browseUrl, { signal: AbortSignal.timeout(30000) })
-  if (!res.ok) throw new Error(`Browse image responded ${res.status}`)
-  const original = Buffer.from(await res.arrayBuffer())
-
   const kmlUrl = result.nisar?.additionalUrls?.find((u) =>
     u.endsWith("_LATLON.kml")
   )
-  const fromKml = kmlUrl ? await cornersFromKml(kmlUrl) : null
+  // The corners file (when there's a token) loads alongside the image.
+  const kml = kmlUrl ? cornersFromKml(kmlUrl) : Promise.resolve(null)
+
+  const res = await fetch(browseUrl, { signal: AbortSignal.timeout(30000) })
+  if (!res.ok) throw new Error(`Browse image responded ${res.status}`)
+  const original = Buffer.from(await res.arrayBuffer())
+  const fromKml = await kml
   // Corners first (the footprint method needs the original image).
   const scene: LoadedScene["scene"] = fromKml
     ? { coordinates: fromKml, georeference: "kml" }

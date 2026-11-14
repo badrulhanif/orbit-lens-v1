@@ -47,8 +47,11 @@ export type CoverResult = {
   pol?: PolStats
 }
 
-const db = (v: number) => `${v > 0 ? "+" : ""}${v.toFixed(1)} dB`
-const km2 = (v: number) =>
+/** "+3.2", "-1.0", "0.0": a plus sign on positive values. */
+export const signed = (v: number, digits = 1) =>
+  `${v > 0 ? "+" : ""}${v.toFixed(digits)}`
+const db = (v: number) => `${signed(v)} dB`
+export const km2 = (v: number) =>
   `${v >= 100 ? Math.round(v).toLocaleString("en-GB") : v.toFixed(1)} km²`
 
 /** Malaysia, Singapore, Brunei, southern Thailand, Sumatra's north. */
@@ -241,7 +244,7 @@ export function movementDrivers(
         id: "unclear",
         cause:
           "Not clear yet: the movement is within twice its uncertainty, so it may be weather delay or wet fields rather than the ground.",
-        evidence: `5–95% of the area: ${s.p5.toFixed(1)} to +${s.p95.toFixed(1)} ${unit}, uncertainty ±${uncertainty} ${unit}. More passes will tighten this.`,
+        evidence: `5–95% of the area: ${signed(s.p5)} to ${signed(s.p95)} ${unit}, uncertainty ±${uncertainty} ${unit}. More passes will tighten this.`,
       },
     ]
   }

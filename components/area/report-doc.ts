@@ -35,7 +35,7 @@ type Block =
       }[]
     }
 
-export type ReportSection = { heading: string; blocks: Block[] }
+type ReportSection = { heading: string; blocks: Block[] }
 
 export type ReportDoc = {
   title: string
@@ -43,6 +43,10 @@ export type ReportDoc = {
   generated: string
   sections: ReportSection[]
 }
+
+/** Earthquake magnitude from its title ("M5.2 earthquake near …"), else 0. */
+export const magnitude = (e: HistoryEvent) =>
+  Number(e.title.match(/\bM(\d+(?:\.\d+)?)/)?.[1] ?? 0)
 
 const num = (v: number) => v.toLocaleString("en-GB")
 const plural = (n: number, word: string) =>
@@ -234,11 +238,7 @@ export function areaReport({
   const since = dated.at(-1)?.date?.slice(0, 4)
   const quakes = history
     .filter((e) => e.type === "earthquake")
-    .sort(
-      (a, b) =>
-        Number(b.title.match(/M([\d.]+)/)?.[1] ?? 0) -
-        Number(a.title.match(/M([\d.]+)/)?.[1] ?? 0)
-    )
+    .sort((a, b) => magnitude(b) - magnitude(a))
   const yearAgo = new Date(Date.now() - 365 * 86400_000)
     .toISOString()
     .slice(0, 10)

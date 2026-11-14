@@ -87,9 +87,17 @@ export function Stat({
   )
 }
 
-export function Field({ label, value }: { label: string; value: string }) {
+export function Field({
+  label,
+  value,
+  className,
+}: {
+  label: string
+  value: string
+  className?: string
+}) {
   return (
-    <div className="min-w-0">
+    <div className={cn("min-w-0", className)}>
       <dt className="text-muted-foreground">{label}</dt>
       <dd className="font-medium wrap-break-word">{value}</dd>
     </div>

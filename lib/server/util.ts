@@ -32,6 +32,8 @@ export class TtlCache<T> {
       },
       () => this.drop(key, value)
     )
+    // Re-inserted keys (expired entries) move to the back of the queue.
+    this.entries.delete(key)
     if (this.entries.size >= this.max) {
       this.entries.delete(this.entries.keys().next().value!)
     }
@@ -89,6 +91,34 @@ export async function mapLimit<T, R>(
   return out
 }
 
+/**
+ * `p`'s value, or `fallback` once `ms` has passed (`p` keeps running, so a
+ * cache behind it still fills for next time).
+ */
+export function within<T, F>(
+  p: Promise<T>,
+  ms: number,
+  fallback: F
+): Promise<T | F> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const timeout = new Promise<F>((resolve) => {
+    timer = setTimeout(() => resolve(fallback), ms)
+  })
+  return Promise.race([p, timeout]).finally(() => clearTimeout(timer))
+}
+
+/** A real "YYYY-MM-DD" day (not "2026-02-30"). */
+export const isDay = (v: string) =>
+  /^\d{4}-\d{2}-\d{2}$/.test(v) &&
+  !Number.isNaN(Date.parse(v)) &&
+  new Date(v).toISOString().slice(0, 10) === v
+
+/** The ?boundary= outline key (states, districts), if sensibly sized. */
+export function boundaryParam(params: URLSearchParams) {
+  const key = params.get("boundary")
+  return key && key.length <= 200 ? key : null
+}
+
 /** Latitude/longitude that are real numbers in range. */
 export const validLatLng = (lat: number, lon: number) =>
   Number.isFinite(lat) &&
@@ -98,7 +128,10 @@ export const validLatLng = (lat: number, lon: number) =>
 
 /** An ordered ?w=&s=&e=&n= box (rounded to ~10 m), else null. */
 export function parseBbox(params: URLSearchParams): Bbox | null {
-  const box = ["w", "s", "e", "n"].map((k) => Number(params.get(k))) as Bbox
+  const raw = ["w", "s", "e", "n"].map((k) => params.get(k)?.trim())
+  // A missing or empty value would otherwise read as 0.
+  if (raw.some((v) => !v)) return null
+  const box = raw.map(Number) as Bbox
   const [w, s, e, n] = box
   if (!box.every(Number.isFinite) || w >= e || s >= n) return null
   return box.map((v) => Math.round(v * 1e4) / 1e4) as Bbox

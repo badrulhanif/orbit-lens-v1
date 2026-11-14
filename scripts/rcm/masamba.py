@@ -105,13 +105,13 @@ def main(product: str):
 
     with tempfile.TemporaryDirectory() as tmp:
         bands = {}
-        for pol in ("HH", "VV"):
+        for pol in ("HH",):
             dn = read_band(product, pol, tmp)
             g_px, gains = lut(os.path.join(cal, f"lutSigma_{pol}.xml"), "gains")
             gain = np.interp(np.arange(dn.shape[1]), g_px, gains)
             bands[pol] = (dn, gain)
 
-        def render(bbox, res, pols=("HH", "VV")):
+        def render(bbox, res, pols=("HH",)):
             w, s, e, n = bbox
             W, H = int(round((e - w) / res)), int(round((n - s) / res))
             lons = w + (np.arange(W) + 0.5) * res

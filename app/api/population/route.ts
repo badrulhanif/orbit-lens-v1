@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server"
 
 import { populationOf } from "@/lib/server/population"
-import { parseBbox } from "@/lib/server/util"
+import { boundaryParam, parseBbox } from "@/lib/server/util"
 
 export const maxDuration = 30
 
@@ -17,11 +17,12 @@ export async function GET(request: NextRequest) {
   if ((box[2] - box[0]) * (box[3] - box[1]) > 60) {
     return Response.json({ people: null })
   }
-  const boundary = params.get("boundary")?.slice(0, 200) ?? null
-  const people = await populationOf(box, boundary).catch((error) => {
-    console.error("[population]", error)
-    return null
-  })
+  const people = await populationOf(box, boundaryParam(params)).catch(
+    (error) => {
+      console.error("[population]", error)
+      return null
+    }
+  )
   return Response.json(
     { people, source: "WorldPop 2020" },
     {

@@ -48,12 +48,12 @@ export async function sentinel1Days(box: Bbox, near: string): Promise<S1Day[]> {
   url.searchParams.set("bounding_box", box.join(","))
   url.searchParams.set("temporal", `${from},${to}`)
   url.searchParams.set("page_size", "500")
-  const body = await fetchJson<{ feed: { entry: CmrGranule[] } }>(url, {
+  const body = await fetchJson<{ feed?: { entry?: CmrGranule[] } }>(url, {
     timeoutMs: 15_000,
     revalidate: 3600,
   })
   const days = new Map<string, Bbox>()
-  for (const g of body.feed.entry ?? []) {
+  for (const g of body.feed?.entry ?? []) {
     const day = g.time_start?.slice(0, 10)
     const b = ringBbox(g.polygons)
     if (!day || !b) continue

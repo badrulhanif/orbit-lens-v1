@@ -69,9 +69,12 @@ type MapCanvasProps = {
 
 const SAR_PREFIX = "sar-"
 
-/** Radar goes under the map's labels so place names stay readable. */
+/**
+ * Radar goes under the map's labels so place names stay readable. (Layer
+ * ids and getLayer, not getStyle(), which serialises the whole style.)
+ */
 function firstLabelLayer(map: MapLibreMap) {
-  return map.getStyle().layers?.find((l) => l.type === "symbol")?.id
+  return map.getLayersOrder().find((id) => map.getLayer(id)?.type === "symbol")
 }
 
 /** Stable, style-safe id for a piece of the mosaic. */
@@ -84,8 +87,8 @@ const pieceId = (id: string) => SAR_PREFIX + id.replace(/[^A-Za-z0-9_-]/g, "_")
  */
 export function syncSarLayers(map: MapLibreMap, sar: SarOverlay | null) {
   const wanted = new Map((sar?.pieces ?? []).map((p) => [pieceId(p.id), p]))
-  const existing = (map.getStyle().layers ?? [])
-    .map((l) => l.id)
+  const existing = map
+    .getLayersOrder()
     .filter((id) => id.startsWith(SAR_PREFIX))
 
   for (const id of existing) {
@@ -260,6 +263,9 @@ function eventMarkerElement(ev: HistoryEvent) {
   return el
 }
 
+/** The event each marker was drawn for (to tell when it needs redrawing). */
+const markerEvent = new WeakMap<MapLibreMarker, HistoryEvent>()
+
 function pinElement(label: string) {
   const el = document.createElement("div")
   el.setAttribute("aria-label", label)
@@ -383,16 +389,15 @@ export function MapCanvas({
   const outlineRef = React.useRef(outline)
   const analysisRef = React.useRef(analysis)
   const styleRef = React.useRef({ view, theme })
-  const callbacks = React.useRef({ onViewportChange })
+  const onViewportChangeRef = React.useRef(onViewportChange)
+  React.useEffect(() => {
+    onViewportChangeRef.current = onViewportChange
+  }, [onViewportChange])
   const onMapRef = React.useRef(onMap)
   React.useEffect(() => {
     onMapRef.current = onMap
   }, [onMap])
   const [ready, setReady] = React.useState(false)
-
-  React.useEffect(() => {
-    callbacks.current = { onViewportChange }
-  }, [onViewportChange])
 
   // Create the map once.
   React.useEffect(() => {
@@ -437,7 +442,7 @@ export function MapCanvas({
         const b = map.getBounds()
         const clamp = (v: number, lo: number, hi: number) =>
           Math.min(hi, Math.max(lo, v))
-        callbacks.current.onViewportChange?.({
+        onViewportChangeRef.current?.({
           latitude: c.lat,
           longitude: c.lng,
           zoom: map.getZoom(),
@@ -470,12 +475,16 @@ export function MapCanvas({
       mapRef.current = map
     })
 
+    const markers = eventMarkers.current
     return () => {
       cancelled = true
       onMapRef.current?.(null)
+      // Removing the map takes its markers and popups with it.
       map?.remove()
       mapRef.current = null
       pinMarker.current = null
+      hoverPopup.current = null
+      markers.clear()
     }
   }, [])
 
@@ -548,35 +557,43 @@ export function MapCanvas({
     }
   }, [outline, ready])
 
-  // Hazard history markers.
+  // Hazard history markers. Only markers whose event changed are replaced,
+  // so the others (and keyboard focus on them) stay put.
   React.useEffect(() => {
     const map = mapRef.current
     const lib = libRef.current
     const markers = eventMarkers.current
     if (!ready || !map || !lib) return
-    for (const m of markers.values()) m.remove()
-    markers.clear()
+    const wanted = new Map<string, HistoryEvent>()
     for (const ev of events) {
       // State-wide records, and those whose point lies outside the area,
       // aren't marked.
       if (ev.scope === "state" || ev.scope === "reported") continue
       // Never let one bad record take the map down.
       if (Math.abs(ev.latitude) > 90 || Math.abs(ev.longitude) > 180) continue
+      wanted.set(ev.id, ev)
+    }
+    for (const [id, m] of markers) {
+      if (markerEvent.get(m) === wanted.get(id)) continue
+      m.remove()
+      markers.delete(id)
+    }
+    for (const [id, ev] of wanted) {
+      if (markers.has(id)) continue
       const el = eventMarkerElement(ev)
       el.addEventListener("click", (e) => {
         e.stopPropagation()
-        onSelectEventRef.current?.(ev.id)
+        onSelectEventRef.current?.(id)
       })
-      el.addEventListener("mouseenter", () => onHoverEventRef.current?.(ev.id))
+      el.addEventListener("mouseenter", () => onHoverEventRef.current?.(id))
       el.addEventListener("mouseleave", () => onHoverEventRef.current?.(null))
-      el.addEventListener("focus", () => onHoverEventRef.current?.(ev.id))
+      el.addEventListener("focus", () => onHoverEventRef.current?.(id))
       el.addEventListener("blur", () => onHoverEventRef.current?.(null))
-      markers.set(
-        ev.id,
-        new lib.Marker({ element: el })
-          .setLngLat([ev.longitude, ev.latitude])
-          .addTo(map)
-      )
+      const marker = new lib.Marker({ element: el })
+        .setLngLat([ev.longitude, ev.latitude])
+        .addTo(map)
+      markerEvent.set(marker, ev)
+      markers.set(id, marker)
     }
   }, [events, ready])
 
@@ -672,14 +689,11 @@ export function MapCanvas({
 
     const frame = (bbox: [number, number, number, number], maxZoom: number) => {
       const [w, s, e, n] = bbox
-      const lat = (n + s) / 2
       // Centre in Mercator space so the box sits evenly on screen.
-      const yMid = (mercY(n) + mercY(s)) / 2
-      const latMid =
-        (Math.atan(Math.sinh(Math.PI * (1 - 2 * yMid))) * 180) / Math.PI
+      const latMid = mercYToLat((mercY(n) + mercY(s)) / 2)
       go(
         (w + e) / 2,
-        Number.isFinite(latMid) ? latMid : lat,
+        Number.isFinite(latMid) ? latMid : (n + s) / 2,
         zoomToFit(bbox, freeW, freeH, maxZoom)
       )
     }

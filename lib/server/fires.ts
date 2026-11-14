@@ -1,7 +1,7 @@
 import type { Bbox } from "@/lib/area"
 import type { FireInfo } from "@/lib/drivers"
 import { areaHistory } from "@/lib/server/area-history"
-import { mapLimit, TtlCache } from "@/lib/server/util"
+import { isDay, mapLimit, TtlCache } from "@/lib/server/util"
 
 /**
  * Was there fire between two radar passes? Radar can't tell a burn scar
@@ -86,8 +86,7 @@ export function firesBetween(
   to: string,
   boundary: string | null = null
 ): Promise<FireInfo | null> {
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(from) || !/^\d{4}-\d{2}-\d{2}$/.test(to))
-    return Promise.resolve(null)
+  if (!isDay(from) || !isDay(to) || from > to) return Promise.resolve(null)
   return cache.get(`${box.join(",")}|${boundary}|${from}|${to}`, async () =>
     KEY
       ? ((await firms(box, from, to).catch(() => null)) ??

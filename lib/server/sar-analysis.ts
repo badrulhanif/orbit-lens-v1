@@ -1,8 +1,9 @@
 import type { Bbox } from "@/lib/area"
-import { rasterMask, type Rings } from "@/lib/server/boundaries"
+import { rasterMask, ringsFor, type Rings } from "@/lib/server/boundaries"
 import { landRingsIn } from "@/lib/server/land"
-import { cropMovementNative, cropSignal } from "@/lib/server/sar-crop"
-import { loadSharp, TtlCache } from "@/lib/server/util"
+import { isGranuleName } from "@/lib/server/nisar"
+import { cropMovementNative, cropSignal, readBbox } from "@/lib/server/sar-crop"
+import { boundaryParam, isDay, loadSharp, TtlCache } from "@/lib/server/util"
 
 /**
  * Pixels to count: inside the area's outline (when given) and on land.
@@ -424,7 +425,7 @@ export async function movementCoherence(
 const changes = new TtlCache<{ stats: unknown; map: Buffer }>(60)
 
 /** Change between two dates, cached so the stats and map share one run. */
-export function cachedChange(
+function cachedChange(
   layer: "signal" | "movement",
   a: string,
   b: string,
@@ -437,5 +438,38 @@ export function cachedChange(
     layer === "signal"
       ? signalChange(a, b, bbox, rings)
       : movementChange(a, b, bbox, rings)
+  )
+}
+
+/**
+ * The two items and area of a /api/analysis/change or /map request, else
+ * null: two days for `signal`, two interferogram names for `movement`.
+ */
+export function parseChange(params: URLSearchParams) {
+  const bbox = readBbox(params)
+  const layer = params.get("layer")
+  const a = params.get("a") ?? ""
+  const b = params.get("b") ?? ""
+  const boundary = boundaryParam(params)
+  if (!bbox) return null
+  if (layer === "signal" && isDay(a) && isDay(b))
+    return { layer, a, b, bbox, boundary } as const
+  if (layer === "movement" && isGranuleName(a) && isGranuleName(b))
+    return { layer, a, b, bbox, boundary } as const
+  return null
+}
+
+/** Change for a parsed request, inside its outline when it has one. */
+export async function changeFor(
+  req: NonNullable<ReturnType<typeof parseChange>>
+) {
+  const rings = await ringsFor(req.boundary)
+  return cachedChange(
+    req.layer,
+    req.a,
+    req.b,
+    req.bbox,
+    rings,
+    rings ? req.boundary! : ""
   )
 }

@@ -24,16 +24,19 @@ export async function POST(request: Request) {
       { status: 501 }
     )
   const body = (await request.json().catch(() => null)) as {
-    email?: string
-    link?: string
+    email?: unknown
+    link?: unknown
     topics?: unknown
   } | null
-  const email = body?.email?.trim().toLowerCase() ?? ""
-  const view = fromSearch(body?.link ?? "")
+  // Anything but strings (a number, an object) is a bad request, not a crash.
+  const email =
+    typeof body?.email === "string" ? body.email.trim().toLowerCase() : ""
+  const shared = typeof body?.link === "string" ? body.link : ""
+  const view = fromSearch(shared)
   if (!validEmail(email) || !view)
     return Response.json({ error: "Check the email address." }, { status: 400 })
   // Keep only the place in the link (not the filter or open event).
-  const link = `?${new URLSearchParams([...new URLSearchParams(body!.link!)].filter(([k]) => !["f", "t", "e"].includes(k)))}`
+  const link = `?${new URLSearchParams([...new URLSearchParams(shared)].filter(([k]) => !["f", "t", "e"].includes(k)))}`
 
   try {
     if ((await count("watches", `email=eq.${encodeURIComponent(email)}`)) >= 10)

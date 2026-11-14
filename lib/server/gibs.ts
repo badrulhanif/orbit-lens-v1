@@ -10,9 +10,18 @@ const DOMAINS_URL =
 let cached: { at: number; ranges: [string, string][] } | null = null
 const TTL_MS = 60 * 60 * 1000
 
+let loading: Promise<[string, string][] | null> | null = null
+
 /** Published date ranges, e.g. [["2025-10-29","2026-03-01"], …]. */
-async function ranges(): Promise<[string, string][] | null> {
-  if (cached && Date.now() - cached.at < TTL_MS) return cached.ranges
+function ranges(): Promise<[string, string][] | null> {
+  if (cached && Date.now() - cached.at < TTL_MS)
+    return Promise.resolve(cached.ranges)
+  // Concurrent requests share one download.
+  loading ??= download().finally(() => (loading = null))
+  return loading
+}
+
+async function download(): Promise<[string, string][] | null> {
   try {
     const res = await fetch(DOMAINS_URL, { signal: AbortSignal.timeout(10000) })
     if (!res.ok) return cached?.ranges ?? null
@@ -22,6 +31,9 @@ async function ranges(): Promise<[string, string][] | null> {
       .split(",")
       .map((r) => r.split("/").slice(0, 2) as [string, string])
       .filter((r) => r.length === 2 && r[0] && r[1])
+    // An empty or changed answer would hide every signal pass for an hour;
+    // treat it like an outage instead.
+    if (!list.length) return cached?.ranges ?? null
     cached = { at: Date.now(), ranges: list }
     return list
   } catch {

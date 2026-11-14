@@ -7,8 +7,11 @@ import type { Place } from "@/lib/geo"
 import type { SarCoverageResponse, SarLayer } from "@/lib/sar"
 
 type Load<T> = { data: T | null; loading: boolean; error: string | null }
+/** A finished load, tagged with the area it was for. */
+type Loaded<T> = Load<T> & { key: string }
 
 const idle = { data: null, loading: false, error: null }
+const pending = { data: null, loading: true, error: null }
 
 async function getJson<T>(url: string, signal: AbortSignal): Promise<T> {
   const res = await fetch(url, { signal })
@@ -26,31 +29,27 @@ export type AreaData = ReturnType<typeof useArea>
 
 export function useArea(place: Place | null) {
   const bbox = React.useMemo(() => (place ? areaBoxFor(place) : null), [place])
-  const key = bbox?.join(",") ?? null
+  // The history is clipped to the place's boundary when it has one.
+  const key = bbox ? `${bbox.join(",")}|${place?.boundaryKey ?? ""}` : null
 
-  const [history, setHistory] = React.useState<Load<AreaHistory>>(idle)
-  const [radar, setRadar] =
-    React.useState<Load<Record<SarLayer, SarCoverageResponse | null>>>(idle)
+  const [history, setHistory] = React.useState<Loaded<AreaHistory> | null>(null)
+  const [radar, setRadar] = React.useState<Loaded<
+    Record<SarLayer, SarCoverageResponse | null>
+  > | null>(null)
 
   React.useEffect(() => {
-    if (!bbox) return
+    if (!bbox || !key) return
     const controller = new AbortController()
     const { signal } = controller
-    // Start both loads together; set "loading" via the async callbacks.
-    Promise.resolve().then(() => {
-      if (signal.aborted) return
-      setHistory({ data: null, loading: true, error: null })
-      setRadar({ data: null, loading: true, error: null })
-    })
 
     getJson<AreaHistory>(
       `/api/area-history?${areaQuery(bbox, place?.boundaryKey)}`,
       signal
     )
-      .then((data) => setHistory({ data, loading: false, error: null }))
+      .then((data) => setHistory({ key, data, loading: false, error: null }))
       .catch((err: Error) => {
         if (!signal.aborted)
-          setHistory({ data: null, loading: false, error: err.message })
+          setHistory({ key, data: null, loading: false, error: err.message })
       })
 
     Promise.all(
@@ -63,6 +62,7 @@ export function useArea(place: Place | null) {
     ).then(([movement, signal_]) => {
       if (signal.aborted) return
       setRadar({
+        key,
         data: { movement, signal: signal_ },
         loading: false,
         error: movement || signal_ ? null : "Couldn't reach the NISAR archive.",
@@ -70,9 +70,14 @@ export function useArea(place: Place | null) {
     })
 
     return () => controller.abort()
-    // `key` captures the bbox.
+    // `key` captures the bbox and boundary.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [key])
 
-  return { bbox, history: place ? history : idle, radar: place ? radar : idle }
+  // Results for another area (the one picked before) never show: until this
+  // area's arrive, it's loading.
+  const current = <T>(s: Loaded<T> | null): Load<T> =>
+    !key ? idle : s?.key === key ? s : pending
+
+  return { bbox, history: current(history), radar: current(radar) }
 }

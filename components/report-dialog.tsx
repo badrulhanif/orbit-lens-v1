@@ -75,9 +75,9 @@ function ReportDialog({
 }) {
   const [hazard, setHazard] = React.useState("flood")
   const [description, setDescription] = React.useState("")
-  const [date, setDate] = React.useState(() =>
-    new Date().toISOString().slice(0, 10)
-  )
+  // UTC, matching what /api/reports accepts (it rejects later dates).
+  const [today] = React.useState(() => new Date().toISOString().slice(0, 10))
+  const [date, setDate] = React.useState(today)
   const [where, setWhere] = React.useState<"area" | "gps">("area")
   const [gps, setGps] = React.useState<{
     latitude: number
@@ -91,7 +91,7 @@ function ReportDialog({
     "idle" | "sending" | "sent" | string
   >("idle")
 
-  function useGps() {
+  function locate() {
     setWhere("gps")
     if (gps) return
     if (!("geolocation" in navigator)) return failGps("unsupported")
@@ -217,7 +217,7 @@ function ReportDialog({
                 <input
                   type="date"
                   required
-                  max={new Date().toISOString().slice(0, 10)}
+                  max={today}
                   value={date}
                   onChange={(e) => setDate(e.target.value)}
                   className={field}
@@ -242,7 +242,7 @@ function ReportDialog({
                   </button>
                   <button
                     type="button"
-                    onClick={useGps}
+                    onClick={locate}
                     aria-pressed={where === "gps"}
                     className={cn(
                       "flex flex-1 items-center justify-center gap-1 rounded-lg border px-2 py-2 text-xs",

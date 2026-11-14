@@ -9,19 +9,24 @@ import { historyFor, type Watch } from "@/lib/server/watches"
 export async function GET(request: NextRequest) {
   const app = appUrl(request)
   const token = request.nextUrl.searchParams.get("token") ?? ""
+  if (!token) return Response.redirect(`${app}/?alerts=invalid`, 302)
   try {
     const [watch] = await select<Watch>(
       "watches",
       `token=eq.${encodeURIComponent(token)}&select=*`
     )
     if (!watch) return Response.redirect(`${app}/?alerts=invalid`, 302)
+    const done = `${app}/${watch.place.link}&alerts=confirmed`
+    // Clicked again later: keep the running baseline (resetting it would
+    // drop anything new since the last alert).
+    if (watch.confirmed) return Response.redirect(done, 302)
     // Today's state is the baseline: alerts are for what's new after it.
     const history = await historyFor(watch.place.link)?.catch(() => null)
     await update("watches", `id=eq.${watch.id}`, {
       confirmed: true,
       snapshot: history ? snapshotOf(history) : null,
     })
-    return Response.redirect(`${app}/${watch.place.link}&alerts=confirmed`, 302)
+    return Response.redirect(done, 302)
   } catch (error) {
     console.error("[alerts/confirm]", error)
     return Response.redirect(`${app}/?alerts=error`, 302)

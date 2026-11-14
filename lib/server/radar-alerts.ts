@@ -16,17 +16,19 @@ import {
   measureTrend,
 } from "@/lib/server/measured"
 import { coverageForArea } from "@/lib/server/nisar"
+import { within } from "@/lib/server/util"
 
 /** As the page sends it: 4 decimals. */
 const round = (b: Bbox) => b.map((v) => Number(v.toFixed(4))) as Bbox
 
-/** Resolves to null once `ms` has passed (the service keeps working and
+/** Null on failure, or once `ms` has passed (the service keeps working and
  * caches the answer for the next check). */
-const within = <T>(p: Promise<T>, ms: number) =>
-  Promise.race([
+const settle = <T>(p: Promise<T>, ms: number) =>
+  within(
     p.catch(() => null),
-    new Promise<null>((r) => setTimeout(() => r(null), Math.max(1000, ms))),
-  ])
+    Math.max(1000, ms),
+    null
+  )
 
 /**
  * The newest NISAR measurements for a watched place (its share link), for
@@ -62,13 +64,13 @@ export async function radarLatest(
       let result: CoverResult | "none" | null = "none"
       let fires = null
       if (due && before.length) {
-        const r = (await within(
+        const r = (await settle(
           measureCover(ids(before), ids(after), box, boundary),
           left()
         )) as (CoverResult & { available?: boolean }) | null
         result = r ? (r.available ? r : "none") : null
         if (r?.available)
-          fires = await within(
+          fires = await settle(
             firesBetween(box, r.a.date, r.b.date, boundary),
             Math.min(30_000, left())
           )
@@ -85,7 +87,7 @@ export async function radarLatest(
       const due = prev?.trend != null && cycle > prev.trend
       let result: TrendResult | "none" | null = "none"
       if (due && new Set(cycles).size > 1 && left() > 5000) {
-        const r = (await within(
+        const r = (await settle(
           measureTrend(ids(trend), box),
           left()
         )) as TrendResult | null

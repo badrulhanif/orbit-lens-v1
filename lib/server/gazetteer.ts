@@ -261,18 +261,26 @@ export async function searchGazetteer(
   return out
 }
 
+let towns: Promise<Row[]> | null = null
+
+/** Just the towns and cities (about half the gazetteer), listed once. */
+function loadTowns() {
+  towns ??= load().then((entries) =>
+    entries.map((e) => e.row).filter((r) => r[3] === "city" || r[3] === "town")
+  )
+  return towns
+}
+
 /**
  * Nearest town or city to a point (within ~40 km), as "Kluang, Johor".
  * Used to name events that sources only label by country.
  */
 export async function nearestTown(latitude: number, longitude: number) {
-  const entries = await load()
+  const rows = await loadTowns()
   let best: Row | null = null
   let bestD = Infinity
   const k = Math.cos((latitude * Math.PI) / 180)
-  for (const { row } of entries) {
-    const kind = row[3]
-    if (kind !== "city" && kind !== "town") continue
+  for (const row of rows) {
     const dx = (row[2] - longitude) * k
     const dy = row[1] - latitude
     const d = dx * dx + dy * dy

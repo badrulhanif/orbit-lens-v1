@@ -16,13 +16,13 @@ import { fetchJson, TtlCache } from "@/lib/server/util"
 
 type JkmCentre = {
   id: number
-  name: string
+  name: string | null
   latti: number
   longi: number
   negeri: string
   daerah: string
   mukim: string
-  bencana: string
+  bencana: string | null
   mangsa: number
   keluarga: number
 }
@@ -70,7 +70,9 @@ export function reliefCentres(): Promise<ReliefCentre[]> {
       timeZone: "Asia/Kuala_Lumpur",
     })
     return (points ?? []).flatMap((c): ReliefCentre[] => {
-      const type = JKM_TYPE[c.bencana.toLowerCase()] ?? "disaster"
+      const kind = (c.bencana ?? "").toLowerCase()
+      // Not `??`: a listed null (fires) means "leave out".
+      const type = Object.hasOwn(JKM_TYPE, kind) ? JKM_TYPE[kind] : "disaster"
       if (!type) return []
       const ok = inMalaysia(c.latti, c.longi)
       const where = [c.mukim, c.daerah].filter(Boolean).join(", ")
@@ -84,10 +86,10 @@ export function reliefCentres(): Promise<ReliefCentre[]> {
           event: {
             id: `jkm-${c.id}`,
             type,
-            title: `${JKM_LABEL[type] ?? c.bencana} relief centre: ${tidyName(c.name)}`,
+            title: `${JKM_LABEL[type] ?? c.bencana} relief centre: ${tidyName(c.name ?? "")}`,
             date: today,
             detail: `${people} · ${where}`,
-            description: `Evacuation centre open now for ${c.bencana.toLowerCase()} victims in ${where}, ${c.negeri}. ${people}.`,
+            description: `Evacuation centre open now for ${kind} victims in ${where}, ${c.negeri}. ${people}.`,
             source: "JKM",
             url: "https://infobencanajkmv2.jkm.gov.my/",
             latitude: ok ? c.latti : 0,

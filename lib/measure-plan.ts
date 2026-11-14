@@ -26,7 +26,7 @@ export function measureBox([w, s, e, n]: Bbox): Bbox {
 }
 
 /** Radar frames over one area per date (big states span several). */
-export const MAX_FRAMES = 8
+const MAX_FRAMES = 8
 
 const overlaps = (p: SarPass, [w, s, e, n]: Bbox) =>
   p.bbox[0] < e && p.bbox[2] > w && p.bbox[1] < n && p.bbox[3] > s

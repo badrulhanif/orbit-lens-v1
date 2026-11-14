@@ -1,10 +1,10 @@
 import type { NextRequest } from "next/server"
 
 import { ringsFor } from "@/lib/server/boundaries"
-import { mapLimit } from "@/lib/server/util"
 import { isGranuleName } from "@/lib/server/nisar"
 import { movementCoherence, signalCover } from "@/lib/server/sar-analysis"
 import { readBbox } from "@/lib/server/sar-crop"
+import { boundaryParam, isDay, mapLimit } from "@/lib/server/util"
 
 /**
  * One value per NISAR pass over an area, for trend charts.
@@ -20,17 +20,16 @@ export async function GET(request: NextRequest) {
     .split(",")
     .filter(Boolean)
     .slice(0, 12)
-  const day = /^\d{4}-\d{2}-\d{2}$/
   if (
     !bbox ||
     !items.length ||
-    (layer === "signal" && !items.every((d) => day.test(d))) ||
+    (layer === "signal" && !items.every(isDay)) ||
     (layer === "movement" && !items.every(isGranuleName)) ||
     (layer !== "signal" && layer !== "movement")
   ) {
     return Response.json({ error: "Invalid request." }, { status: 400 })
   }
-  const rings = await ringsFor(params.get("boundary"))
+  const rings = await ringsFor(boundaryParam(params))
   const values =
     layer === "signal"
       ? await mapLimit(items, 3, (d) => signalCover(d, bbox, rings))

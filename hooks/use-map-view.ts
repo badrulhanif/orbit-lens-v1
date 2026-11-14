@@ -7,13 +7,20 @@ import { MAP_VIEWS, type MapView } from "@/lib/map-styles"
 const KEY = "orbit-lens:map-view"
 const EVENT = "orbit-lens:map-view-change"
 
+const isView = (value: unknown): value is MapView =>
+  MAP_VIEWS.some((v) => v.id === value)
+
+/** This tab's choice, for when storage is blocked (private mode etc.). */
+let chosen: MapView | null = null
+
 function read(): MapView {
   try {
     const value = window.localStorage.getItem(KEY)
-    return MAP_VIEWS.some((v) => v.id === value) ? (value as MapView) : "map"
+    if (isView(value)) return value
   } catch {
-    return "map"
+    // Storage blocked: fall back to this tab's choice.
   }
+  return chosen ?? "map"
 }
 
 function subscribe(callback: () => void) {
@@ -29,6 +36,7 @@ function subscribe(callback: () => void) {
 export function useMapView() {
   const view = React.useSyncExternalStore<MapView>(subscribe, read, () => "map")
   const setView = React.useCallback((next: MapView) => {
+    chosen = next
     try {
       window.localStorage.setItem(KEY, next)
     } catch {

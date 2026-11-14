@@ -130,7 +130,8 @@ export function CompareMap({
   const dragging = React.useRef(false)
   const onPointerDown = (e: React.PointerEvent) => {
     dragging.current = true
-    ;(e.target as HTMLElement).setPointerCapture(e.pointerId)
+    // currentTarget: the button itself, even when pressed on its icon.
+    e.currentTarget.setPointerCapture(e.pointerId)
   }
   const onPointerMove = (e: React.PointerEvent) => {
     if (!dragging.current || !mainMap) return
@@ -156,6 +157,10 @@ export function CompareMap({
         onPointerDown={onPointerDown}
         onPointerMove={onPointerMove}
         onPointerUp={onPointerUp}
+        // A cancelled touch (e.g. the browser took over the gesture) ends
+        // the drag too, or the handle would follow the next hover.
+        onPointerCancel={onPointerUp}
+        onLostPointerCapture={onPointerUp}
         onKeyDown={(e) => {
           if (e.key === "ArrowLeft") onSplitChange(Math.max(0.02, split - 0.05))
           if (e.key === "ArrowRight")

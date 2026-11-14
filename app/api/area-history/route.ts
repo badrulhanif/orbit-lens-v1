@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server"
 
 import { areaHistory } from "@/lib/server/area-history"
-import { parseBbox } from "@/lib/server/util"
+import { boundaryParam, parseBbox } from "@/lib/server/util"
 
 /**
  * Recorded natural hazards in an area (inside its boundary when given).
@@ -17,11 +17,7 @@ export async function GET(request: NextRequest) {
   if (box[2] - box[0] > 25 || box[3] - box[1] > 25) {
     return Response.json({ error: "Area too large." }, { status: 400 })
   }
-  const boundary = params.get("boundary")
-  const data = await areaHistory(
-    box,
-    boundary && boundary.length < 200 ? boundary : null
-  )
+  const data = await areaHistory(box, boundaryParam(params))
   return Response.json(data, {
     headers: { "Cache-Control": "private, max-age=300" },
   })

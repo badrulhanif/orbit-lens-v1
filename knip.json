@@ -1,9 +1,4 @@
 {
   "$schema": "https://unpkg.com/knip@5/schema.json",
-  "ignore": [
-    "workers/**"
-  ],
-  "ignoreBinaries": [
-    "python3"
-  ]
+  "ignore": ["components/ui/**"]
 }

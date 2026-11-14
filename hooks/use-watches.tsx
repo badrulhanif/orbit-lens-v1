@@ -134,11 +134,16 @@ function useWatchesState() {
         typeof Notification !== "undefined" &&
         Notification.permission === "granted"
       )
-        for (const a of found.slice(0, 3))
-          new Notification(`${a.place}: ${a.title}`, {
-            body: a.detail,
-            tag: a.id,
-          })
+        try {
+          for (const a of found.slice(0, 3))
+            new Notification(`${a.place}: ${a.title}`, {
+              body: a.detail,
+              tag: a.id,
+            })
+        } catch {
+          // Android Chrome only notifies from a service worker (the
+          // constructor throws); the alerts are still under the bell.
+        }
     },
     [storeAlerts]
   )
@@ -179,30 +184,44 @@ function useWatchesState() {
     }
   }, [announce, storeWatches])
 
+  // One check at a time: two at once would compare against the same
+  // snapshot and notify about the same news twice.
+  const checkBusy = React.useRef(false)
   const check = React.useCallback(async () => {
     const list = watchesRef.current
-    if (!list.length) return
-    const found: StoredAlert[] = []
-    const updated: Watched[] = []
-    for (const w of list) {
-      const history = await historyOf(w.link)
-      if (!history) {
-        updated.push(w)
-        continue
+    if (!list.length || checkBusy.current) return
+    checkBusy.current = true
+    try {
+      const found: StoredAlert[] = []
+      const updated: Watched[] = []
+      for (const w of list) {
+        const history = await historyOf(w.link)
+        if (!history) {
+          updated.push(w)
+          continue
+        }
+        const now = new Date().toISOString()
+        for (const a of newAlerts(w.snapshot, history, cleanTopics(w.topics)))
+          found.push({
+            ...a,
+            link: w.link,
+            place: w.name,
+            at: now,
+            read: false,
+          })
+        updated.push({ ...w, snapshot: snapshotOf(history) })
       }
-      const now = new Date().toISOString()
-      for (const a of newAlerts(w.snapshot, history, cleanTopics(w.topics)))
-        found.push({ ...a, link: w.link, place: w.name, at: now, read: false })
-      updated.push({ ...w, snapshot: snapshotOf(history) })
-    }
-    // Keep fields set meanwhile (radar), update the snapshot.
-    const snap = new Map(updated.map((w) => [w.link, w.snapshot]))
-    storeWatches(
-      watchesRef.current.map((w) =>
-        snap.has(w.link) ? { ...w, snapshot: snap.get(w.link)! } : w
+      // Keep fields set meanwhile (radar), update the snapshot.
+      const snap = new Map(updated.map((w) => [w.link, w.snapshot]))
+      storeWatches(
+        watchesRef.current.map((w) =>
+          snap.has(w.link) ? { ...w, snapshot: snap.get(w.link)! } : w
+        )
       )
-    )
-    announce(found)
+      announce(found)
+    } finally {
+      checkBusy.current = false
+    }
     void checkRadar()
   }, [announce, checkRadar, storeWatches])
 
@@ -262,11 +281,10 @@ function useWatchesState() {
     markRead: () =>
       storeAlerts((prev) => prev.map((a) => ({ ...a, read: true }))),
     clear: () => storeAlerts(() => []),
-    check,
   }
 }
 
-export type Watches = ReturnType<typeof useWatchesState>
+type Watches = ReturnType<typeof useWatchesState>
 
 const WatchesContext = React.createContext<Watches | null>(null)
 

@@ -57,11 +57,12 @@ const cache = new TtlCache<IpLocation | null>(5000, 6 * 60 * 60_000)
 
 /**
  * Rough location for an IP (city level). Pass null to look up this server's
- * own public IP, which is the visitor's IP in local dev. Never throws.
+ * own public IP, which is the visitor's IP in local dev. Never throws; a
+ * lookup that failed (timeout, service down) isn't kept, so it's retried.
  */
 function lookupIp(ip: string | null): Promise<IpLocation | null> {
-  return cache.get(ip ?? "self", async () => {
-    try {
+  return cache
+    .get(ip ?? "self", async () => {
       const data = await fetchJson<IpWhoResponse>(
         `https://ipwho.is/${ip ?? ""}?fields=success,ip,city,region,country,latitude,longitude,connection`,
         { timeoutMs: 5000 }
@@ -78,11 +79,8 @@ function lookupIp(ip: string | null): Promise<IpLocation | null> {
           .join(", "),
         isp: data.connection?.isp ?? null,
       }
-    } catch {
-      // Unknown location; callers cope.
-      return null
-    }
-  })
+    })
+    .catch(() => null) // Unknown location; callers cope.
 }
 
 /** The visitor's rough location, from their request headers. */

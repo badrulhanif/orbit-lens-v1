@@ -7,6 +7,7 @@ RUN pip install --no-cache-dir -r requirements.txt
 COPY workers/nisar/reader.py workers/nisar/server.py ./
 # Coastlines and state/district outlines (land-only, in-area figures).
 COPY data/land.json data/boundaries.json ./
-ENV PORT=8787
+# Logs reach Render as they're printed.
+ENV PORT=8787 PYTHONUNBUFFERED=1
 EXPOSE 8787
 CMD ["python", "server.py"]

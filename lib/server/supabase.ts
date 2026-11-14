@@ -27,11 +27,8 @@ async function call<T>(path: string, init: RequestInit = {}): Promise<T> {
     cache: "no-store",
     signal: AbortSignal.timeout(15_000),
   })
-  if (!res.ok)
-    throw new Error(
-      `Supabase ${res.status}: ${(await res.text()).slice(0, 200)}`
-    )
   const text = await res.text()
+  if (!res.ok) throw new Error(`Supabase ${res.status}: ${text.slice(0, 200)}`)
   return (text ? JSON.parse(text) : null) as T
 }
 
@@ -63,14 +60,22 @@ export const update = (
 export const remove = (table: string, query: string) =>
   call<unknown>(`/rest/v1/${table}?${query}`, { method: "DELETE" })
 
-/** Count matching rows (for rate limits). */
+/**
+ * Count matching rows (for rate limits). Throws when Supabase doesn't
+ * answer, so a limit can't be skipped by an outage.
+ */
 export async function count(table: string, query: string) {
+  if (!supabaseEnabled()) throw new Error("Supabase isn't set up")
   const res = await fetch(`${URL_}/rest/v1/${table}?select=id&${query}`, {
     method: "HEAD",
     headers: headers({ Prefer: "count=exact" }),
     cache: "no-store",
+    signal: AbortSignal.timeout(15_000),
   })
-  return Number(res.headers.get("content-range")?.split("/")[1] ?? 0)
+  const total = Number(res.headers.get("content-range")?.split("/")[1])
+  if (!res.ok || !Number.isFinite(total))
+    throw new Error(`Supabase count ${res.status}`)
+  return total
 }
 
 /** Upload a file to a public bucket; returns its public URL. */

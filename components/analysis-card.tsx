@@ -12,6 +12,7 @@ import {
   type LucideIcon,
 } from "lucide-react"
 
+import { magnitude } from "@/components/area/report-doc"
 import { Loading } from "@/components/area/ui"
 import { Button } from "@/components/ui/button"
 import type { useArea } from "@/hooks/use-area"
@@ -163,13 +164,14 @@ export function AnalysisCard({
 }) {
   const def = appById(app)
   const layer = def.layer
-  const bbox = area.bbox ? analysisBox(area.bbox) : null
+  const bbox = React.useMemo(
+    () => (area.bbox ? analysisBox(area.bbox) : null),
+    [area.bbox]
+  )
   const coverage = area.radar.data?.[layer] ?? null
   const options: PassOption[] = React.useMemo(
     () => (bbox && coverage ? passOptions(coverage.cycles, bbox) : []),
-    // bbox is derived from area.bbox.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-    [coverage, area.bbox]
+    [coverage, bbox]
   )
   const latest = options[0]
   const base =
@@ -199,6 +201,9 @@ export function AnalysisCard({
   const [measured, setMeasured] = React.useState(false)
   const series = useJson<Series>(seriesUrl)
   const showing = !!overlay && overlay.url === mapUrl
+  // Radar from after a recorded event says nothing about its cause.
+  const afterEvent =
+    !!eventDate && !!base && base.pass.start.slice(0, 10) > eventDate
 
   const related = events.filter((e) => def.hazards.includes(e.type))
   const quakes = events.filter((e) => e.type === "earthquake")
@@ -256,9 +261,9 @@ export function AnalysisCard({
         {base!.label} → {latest!.label} · track {latest!.pass.track}
       </p>
 
-      {eventDate && base!.pass.start.slice(0, 10) > eventDate && (
+      {afterEvent && (
         <p className="rounded-lg bg-amber-500/10 px-2.5 py-2 text-[11px] leading-relaxed text-amber-900 dark:text-amber-200">
-          This event was on {eventDate.split("-").reverse().join("/")}, before
+          This event was on {eventDate!.split("-").reverse().join("/")}, before
           these radar passes. The changes below happened around this spot
           afterwards and are not caused by it.
         </p>
@@ -313,7 +318,7 @@ export function AnalysisCard({
         <Metrics app={app} d={d} related={related} quakes={quakes} />
       )}
 
-      {seriesUrl && (
+      {seriesUrl && (series.loading || hasTrend(seriesValues)) && (
         <div className="grid gap-1">
           <p className="flex justify-between text-[11px] text-muted-foreground">
             <span>{seriesLabel} over time</span>
@@ -342,7 +347,7 @@ export function AnalysisCard({
                     kind: layer,
                     label:
                       `${base!.label} → ${latest!.label}` +
-                      (eventDate && base!.pass.start.slice(0, 10) > eventDate
+                      (afterEvent
                         ? " · after the event, not caused by it"
                         : ""),
                   }
@@ -458,9 +463,6 @@ const TONE: Record<string, string> = {
   red: "bg-red-500/10 text-red-800 dark:text-red-200",
 }
 
-const magnitude = (e: HistoryEvent) =>
-  Number(e.title.match(/M(\d+(\.\d+)?)/)?.[1] ?? 0)
-
 function summaryLines(
   app: AppId,
   d: (SignalChange & CoherenceChange) | null,
@@ -507,6 +509,10 @@ function summaryLines(
   )
   return out
 }
+
+/** A trend line needs at least two values. */
+const hasTrend = (values: (number | null)[]) =>
+  values.filter((v) => v != null).length > 1
 
 function Sparkline({
   values,
@@ -609,17 +615,7 @@ export function ChangeLegend({
     return <MeasuredLegend overlay={overlay} onClose={onClose} />
   if (overlay.kind === "polarization")
     return (
-      <section className="grid gap-2 rounded-xl bg-background/90 p-3 text-xs shadow-lg ring-1 shadow-black/10 ring-foreground/10 backdrop-blur-xl">
-        <div className="flex items-start justify-between gap-2">
-          <p className="font-medium">{overlay.label}</p>
-          <button
-            type="button"
-            onClick={onClose}
-            className="text-[11px] text-muted-foreground hover:text-foreground"
-          >
-            Hide
-          </button>
-        </div>
+      <LegendCard title={overlay.label} onClose={onClose}>
         {overlay.diverging && (
           <div className="grid gap-1">
             <div className="h-2.5 rounded-full bg-[linear-gradient(to_right,#cd3232,#ffffff,#3232ff)] ring-1 ring-foreground/10" />
@@ -634,40 +630,11 @@ export function ChangeLegend({
             {overlay.note}
           </p>
         )}
-      </section>
+      </LegendCard>
     )
-  const rows =
-    overlay.kind === "signal"
-      ? [
-          ["#2563eb", "New water", "dark on radar now, not before"],
-          ["#7dd3fc", "Water receded", "was water, now land"],
-          ["#ea580c", "Vegetation lost", "canopy echo dropped"],
-          ["#16a34a", "Vegetation gained", "canopy echo rose"],
-        ]
-      : [
-          [
-            "#dc2626",
-            "Newly disturbed",
-            "coherence lost since the earlier pair",
-          ],
-          ["#14b8a6", "Recovered", "coherence regained"],
-          ["#71717a", "Not measurable", "water or dense canopy in both"],
-        ]
+  const rows = overlay.kind === "signal" ? SIGNAL_KEY : MOVEMENT_KEY
   return (
-    <section className="grid gap-2 rounded-xl bg-background/90 p-3 text-xs shadow-lg ring-1 shadow-black/10 ring-foreground/10 backdrop-blur-xl">
-      <div className="flex items-start justify-between gap-2">
-        <div>
-          <p className="font-medium">Change map</p>
-          <p className="text-[11px] text-muted-foreground">{overlay.label}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-[11px] text-muted-foreground hover:text-foreground"
-        >
-          Hide
-        </button>
-      </div>
+    <LegendCard title="Change map" subtitle={overlay.label} onClose={onClose}>
       <ul className="grid gap-1.5">
         {rows.map(([color, label, hint]) => (
           <li key={label} className="flex items-center gap-2.5">
@@ -682,9 +649,23 @@ export function ChangeLegend({
           </li>
         ))}
       </ul>
-    </section>
+    </LegendCard>
   )
 }
+
+/** Colour, name and meaning of each class on a change map. */
+const SIGNAL_KEY = [
+  ["#2563eb", "New water", "dark on radar now, not before"],
+  ["#7dd3fc", "Water receded", "was water, now land"],
+  ["#ea580c", "Vegetation lost", "canopy echo dropped"],
+  ["#16a34a", "Vegetation gained", "canopy echo rose"],
+] as const
+
+const MOVEMENT_KEY = [
+  ["#dc2626", "Newly disturbed", "coherence lost since the earlier pair"],
+  ["#14b8a6", "Recovered", "coherence regained"],
+  ["#71717a", "Not measurable", "water or dense canopy in both"],
+] as const
 
 /** Colour scale for measured movement maps. */
 function MeasuredLegend({
@@ -696,20 +677,11 @@ function MeasuredLegend({
 }) {
   const r = overlay.range ?? 20
   return (
-    <section className="grid gap-2 rounded-xl bg-background/90 p-3 text-xs shadow-lg ring-1 shadow-black/10 ring-foreground/10 backdrop-blur-xl">
-      <div className="flex items-start justify-between gap-2">
-        <div className="min-w-0">
-          <p className="font-medium">Measured movement</p>
-          <p className="text-[11px] text-muted-foreground">{overlay.label}</p>
-        </div>
-        <button
-          type="button"
-          onClick={onClose}
-          className="text-[11px] text-muted-foreground hover:text-foreground"
-        >
-          Hide
-        </button>
-      </div>
+    <LegendCard
+      title="Measured movement"
+      subtitle={overlay.label}
+      onClose={onClose}
+    >
       <div
         className="h-2.5 rounded-full ring-1 ring-foreground/10"
         style={{
@@ -726,6 +698,40 @@ function MeasuredLegend({
         Along the radar&apos;s line of sight, relative to the area&apos;s
         median. Clear = not measurable (water, dense forest).
       </p>
+    </LegendCard>
+  )
+}
+
+/** The floating legend card: title, optional subtitle, and "Hide". */
+function LegendCard({
+  title,
+  subtitle,
+  onClose,
+  children,
+}: {
+  title: string
+  subtitle?: string
+  onClose: () => void
+  children: React.ReactNode
+}) {
+  return (
+    <section className="grid gap-2 rounded-xl bg-background/90 p-3 text-xs shadow-lg ring-1 shadow-black/10 ring-foreground/10 backdrop-blur-xl">
+      <div className="flex items-start justify-between gap-2">
+        <div className="min-w-0">
+          <p className="font-medium">{title}</p>
+          {subtitle && (
+            <p className="text-[11px] text-muted-foreground">{subtitle}</p>
+          )}
+        </div>
+        <button
+          type="button"
+          onClick={onClose}
+          className="shrink-0 text-[11px] text-muted-foreground hover:text-foreground"
+        >
+          Hide
+        </button>
+      </div>
+      {children}
     </section>
   )
 }

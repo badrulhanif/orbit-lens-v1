@@ -2,6 +2,7 @@ import type { NextRequest } from "next/server"
 
 import { isGranuleName } from "@/lib/server/nisar"
 import { cropMovement, cropSignal, readBbox } from "@/lib/server/sar-crop"
+import { isDay } from "@/lib/server/util"
 
 /**
  * One NISAR image cut to an area, for comparing dates.
@@ -22,8 +23,7 @@ export async function GET(request: NextRequest) {
       png = await cropMovement(granule, bbox)
     } else if (params.get("layer") === "signal") {
       const date = params.get("date") ?? ""
-      if (!/^\d{4}-\d{2}-\d{2}$/.test(date))
-        return new Response("Invalid date", { status: 400 })
+      if (!isDay(date)) return new Response("Invalid date", { status: 400 })
       png = await cropSignal(date, bbox)
     } else {
       return new Response("Unknown layer", { status: 400 })

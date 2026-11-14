@@ -162,6 +162,13 @@ export async function regionMatcher(boundaryKey: string | null | undefined) {
   return Object.assign(match, { parts })
 }
 
+/** "Daerah Keluang" → "Keluang", "Tenom District" → "Tenom". */
+export const plainName = (name: string) =>
+  name
+    .replace(/^(Daerah|Daerha|W\.?P\.?)\s+/i, "")
+    .replace(/\s+District$/i, "")
+    .replace(/\s*\(.*\)$/, "")
+
 /** The ways the area's name may be written in a warning text. */
 export function areaNames(boundaryKey: string) {
   const [kind, name, area] = boundaryKey.split("|")
@@ -169,10 +176,7 @@ export function areaNames(boundaryKey: string) {
     kind === "state" ? name : (area?.split(",")[0]?.trim() ?? name)
   const state = STATE_NAMES[stateName] ?? [stateName]
   if (kind === "state") return { district: null, state }
-  const plain = name
-    .replace(/^(Daerah|Daerha|W\.?P\.?)\s+/i, "")
-    .replace(/\s+District$/i, "")
-    .replace(/\s*\(.*\)$/, "")
+  const plain = plainName(name)
   const alt = Object.entries(ALIAS)
     .filter(([, v]) => v === normaliseRegion(plain))
     .map(([k]) => k)

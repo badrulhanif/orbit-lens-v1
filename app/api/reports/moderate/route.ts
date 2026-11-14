@@ -17,11 +17,16 @@ export async function GET(request: Request) {
     return Response.json({ error: "Not set up." }, { status: 501 })
   if (!allowed(request))
     return Response.json({ error: "Wrong key." }, { status: 401 })
-  const rows = await select<CommunityReport>(
-    "community_reports",
-    "status=eq.pending&order=created_at.asc&limit=100&select=*"
-  )
-  return Response.json({ reports: rows })
+  try {
+    const rows = await select<CommunityReport>(
+      "community_reports",
+      "status=eq.pending&order=created_at.asc&limit=100&select=*"
+    )
+    return Response.json({ reports: rows })
+  } catch (error) {
+    console.error("[reports/moderate]", error)
+    return Response.json({ error: "Couldn't load reports." }, { status: 502 })
+  }
 }
 
 export async function POST(request: Request) {
@@ -39,6 +44,16 @@ export async function POST(request: Request) {
     !["approved", "rejected"].includes(body.status ?? "")
   )
     return Response.json({ error: "Invalid request." }, { status: 400 })
-  await update("community_reports", `id=eq.${body.id}`, { status: body.status })
-  return Response.json({ ok: true })
+  try {
+    await update("community_reports", `id=eq.${body.id}`, {
+      status: body.status,
+    })
+    return Response.json({ ok: true })
+  } catch (error) {
+    console.error("[reports/moderate]", error)
+    return Response.json(
+      { error: "Couldn't save that decision." },
+      { status: 502 }
+    )
+  }
 }

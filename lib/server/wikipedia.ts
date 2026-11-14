@@ -10,13 +10,20 @@ const kept = new Map<string, { at: number; text: string | null }>()
 
 export const wikiTitle = (url: string | null | undefined) => {
   const m = url?.match(/^https:\/\/en\.wikipedia\.org\/wiki\/([^#?]+)/)
-  return m ? decodeURIComponent(m[1]).replace(/_/g, " ") : null
+  if (!m) return null
+  try {
+    return decodeURIComponent(m[1]).replace(/_/g, " ")
+  } catch {
+    return null // A malformed %-escape.
+  }
 }
 
 export async function wikipediaSummaries(
   urls: (string | null | undefined)[]
 ): Promise<Map<string, string>> {
   const titles = [...new Set(urls.map(wikiTitle).filter((t) => t !== null))]
+  // Kept summaries are small, but don't let them grow without limit.
+  if (kept.size > 5000) kept.clear()
   const missing = titles.filter((t) => {
     const k = kept.get(t)
     return !k || Date.now() - k.at > DAY

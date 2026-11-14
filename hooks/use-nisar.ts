@@ -73,6 +73,58 @@ function cycleIndexFor(cycles: SarCycle[], date?: string, keep?: number) {
   return best
 }
 
+/** The drawable pieces (swath images or GIBS days) of one cycle. */
+function piecesFor(
+  layer: SarLayer | null,
+  c: SarCycle | null,
+  scenes: Record<string, SarScene | "error">,
+  detail: "small" | "full"
+) {
+  const pieces: SarTile[] = []
+  let waiting = 0
+  if (!layer || !c) return { pieces, waiting }
+  if (layer === "signal") {
+    // NASA GIBS serves one map layer per day; group the swaths by day.
+    const days = new Map<string, Bbox>()
+    for (const p of c.passes) {
+      const d = passDay(p)
+      const b = days.get(d)
+      days.set(
+        d,
+        b
+          ? [
+              Math.min(b[0], p.bbox[0]),
+              Math.min(b[1], p.bbox[1]),
+              Math.max(b[2], p.bbox[2]),
+              Math.max(b[3], p.bbox[3]),
+            ]
+          : p.bbox
+      )
+    }
+    for (const [day, bounds] of days) {
+      pieces.push({
+        id: `signal-${day}`,
+        kind: "tiles",
+        tiles: gibsSignalTiles(day),
+        bounds,
+      })
+    }
+  } else {
+    for (const p of c.passes) {
+      const scene = scenes[p.id]
+      if (!scene) waiting++
+      if (!scene || scene === "error") continue
+      pieces.push({
+        id: `${p.id}-${detail}`,
+        kind: "image",
+        url: `${scene.imageUrl}&size=${detail}`,
+        coordinates: scene.coordinates,
+      })
+    }
+  }
+  return { pieces, waiting }
+}
+
 /**
  * NISAR radar layer state. Switch a layer on and it finds every swath over
  * the area on screen, groups them by 12-day cycle and stitches the chosen
@@ -120,6 +172,9 @@ export function useNisar({
       area: Bbox,
       options: { preferDate?: string; keepCycle?: number; first?: boolean } = {}
     ) => {
+      // A load asked for now replaces a pending follow-the-map reload (which
+      // would otherwise fire later with the layer it was scheduled for).
+      if (autoTimer.current) clearTimeout(autoTimer.current)
       request.current?.abort()
       const controller = new AbortController()
       request.current = controller
@@ -175,6 +230,7 @@ export function useNisar({
     (next: SarLayer | null) => {
       setLayerState(next)
       if (!next) {
+        if (autoTimer.current) clearTimeout(autoTimer.current)
         request.current?.abort()
         setLoading(false)
         return
@@ -261,53 +317,6 @@ export function useNisar({
     }
   }, [shown, cycleB, layer])
 
-  /** The drawable pieces (swath images or GIBS days) of one cycle. */
-  const piecesFor = (c: SarCycle | null) => {
-    const pieces: SarTile[] = []
-    let waiting = 0
-    if (!layer || !c) return { pieces, waiting }
-    if (layer === "signal") {
-      // NASA GIBS serves one map layer per day; group the swaths by day.
-      const days = new Map<string, Bbox>()
-      for (const p of c.passes) {
-        const d = passDay(p)
-        const b = days.get(d)
-        days.set(
-          d,
-          b
-            ? [
-                Math.min(b[0], p.bbox[0]),
-                Math.min(b[1], p.bbox[1]),
-                Math.max(b[2], p.bbox[2]),
-                Math.max(b[3], p.bbox[3]),
-              ]
-            : p.bbox
-        )
-      }
-      for (const [day, bounds] of days) {
-        pieces.push({
-          id: `signal-${day}`,
-          kind: "tiles",
-          tiles: gibsSignalTiles(day),
-          bounds,
-        })
-      }
-    } else {
-      for (const p of c.passes) {
-        const scene = scenes[p.id]
-        if (!scene) waiting++
-        if (!scene || scene === "error") continue
-        pieces.push({
-          id: `${p.id}-${detail}`,
-          kind: "image",
-          url: `${scene.imageUrl}&size=${detail}`,
-          coordinates: scene.coordinates,
-        })
-      }
-    }
-    return { pieces, waiting }
-  }
-
   // L-band vs C-band: NISAR on the main map, Sentinel-1 from the nearest
   // day on the swipe side.
   const [cband, setCband] = React.useState(false)
@@ -370,35 +379,49 @@ export function useNisar({
   }, [s1Key])
   const s1Now = s1 && s1.key === s1Key ? s1 : null
 
-  const main = piecesFor(shown)
-  const side = piecesFor(cycleB)
-  const overlay: SarOverlay | null =
-    layer && main.pieces.length
-      ? { layer, pieces: main.pieces, opacity: 0.85 }
-      : null
-  const compareOverlay: SarOverlay | null = rcmOn
-    ? {
+  // Memoised so the maps only redraw the radar when it really changes (the
+  // map effects run on every new overlay object).
+  const main = React.useMemo(
+    () => piecesFor(layer, shown, scenes, detail),
+    [layer, shown, scenes, detail]
+  )
+  const side = React.useMemo(
+    () => piecesFor(layer, cycleB, scenes, detail),
+    [layer, cycleB, scenes, detail]
+  )
+  const overlay = React.useMemo<SarOverlay | null>(
+    () =>
+      layer && main.pieces.length
+        ? { layer, pieces: main.pieces, opacity: 0.85 }
+        : null,
+    [layer, main]
+  )
+  const s1Day = s1Now?.day ?? null
+  const compareOn = compare !== null
+  const compareOverlay = React.useMemo<SarOverlay | null>(() => {
+    if (rcmOn && rcmScene)
+      return {
         layer: "signal",
         pieces: [
           {
-            id: `rcm-${rcmScene!.id}`,
+            id: `rcm-${rcmScene.id}`,
             kind: "image",
-            url: rcmScene!.url,
-            coordinates: rcmCorners(rcmScene!),
+            url: rcmScene.url,
+            coordinates: rcmCorners(rcmScene),
           },
         ],
         opacity: 0.9,
       }
-    : cbandOn
-      ? s1Now?.day
+    if (cbandOn)
+      return s1Day
         ? {
             layer: "signal",
             pieces: [
               {
-                id: `s1-${s1Now.day.day}`,
+                id: `s1-${s1Day.day}`,
                 kind: "tiles",
-                tiles: sentinel1Tiles(s1Now.day.day),
-                bounds: s1Now.day.bbox,
+                tiles: sentinel1Tiles(s1Day.day),
+                bounds: s1Day.bbox,
                 maxzoom: 12,
                 attribution:
                   "Sentinel-1: ESA Copernicus, processed by NASA OPERA (JPL) via NASA GIBS",
@@ -407,9 +430,10 @@ export function useNisar({
             opacity: 0.85,
           }
         : null
-      : layer && compare && side.pieces.length
-        ? { layer, pieces: side.pieces, opacity: 0.85 }
-        : null
+    return layer && compareOn && side.pieces.length
+      ? { layer, pieces: side.pieces, opacity: 0.85 }
+      : null
+  }, [rcmOn, rcmScene, cbandOn, s1Day, layer, compareOn, side])
   const waiting = main.waiting + (compare ? side.waiting : 0)
 
   /** Labels for the two sides of the swipe view. */
@@ -453,7 +477,6 @@ export function useNisar({
     compareLabels,
     /** Sentinel-1 (C-band) beside NISAR (L-band); "signal" layer only. */
     cband: cbandOn,
-    setCband,
     /** Which C-band image is on the swipe side. */
     cbandSource: rcmOn ? ("rcm" as const) : ("s1" as const),
     /** Turn the C-band view on with a source, or off with null. */

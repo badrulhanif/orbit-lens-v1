@@ -1,12 +1,12 @@
 "use client"
 
 import * as React from "react"
-import { DownloadIcon, LayersIcon, RulerIcon } from "lucide-react"
+import { LayersIcon } from "lucide-react"
 
 import type { AnalysisOverlay } from "@/components/analysis-card"
 import { Loading } from "@/components/area/ui"
 import { Drivers } from "@/components/drivers"
-import { Figure, pct } from "@/components/measured"
+import { Figure, MeasuredShell, PngDownload, pct } from "@/components/measured"
 import { Polarizations, type PolImages } from "@/components/polarizations"
 import { Button } from "@/components/ui/button"
 import { useJson } from "@/hooks/use-json"
@@ -81,7 +81,10 @@ export function MeasuredCover({
   onAvailable?: (ok: boolean) => void
   onLines?: (lines: string[]) => void
 }) {
-  const { before, after } = coverGranules(cycles, bbox, baseline)
+  const { before, after } = React.useMemo(
+    () => coverGranules(cycles, bbox, baseline),
+    [cycles, bbox, baseline]
+  )
   const url =
     before.length && after.length
       ? `/api/analysis/measured?kind=cover&a=${granuleIds(before)}&b=${granuleIds(after)}&${areaQuery(measureBox(bbox), boundaryKey)}`
@@ -139,11 +142,7 @@ export function MeasuredCover({
             ]
 
   return (
-    <div className="grid gap-2 rounded-lg border border-emerald-500/30 bg-emerald-500/5 p-2.5 text-xs">
-      <p className="flex items-center gap-1.5 font-semibold">
-        <RulerIcon className="size-3.5 text-emerald-600" />
-        Measured from full NISAR data
-      </p>
+    <MeasuredShell>
       {res.loading ? (
         <Loading small>
           Reading the radar products… (up to a minute the first time)
@@ -194,21 +193,10 @@ export function MeasuredCover({
               {overlay?.url === c.map ? "Hide map" : "Measured change map"}
             </Button>
             {c.map && (
-              <Button
-                variant="ghost"
-                size="sm"
-                className="h-8"
-                nativeButton={false}
-                render={
-                  <a
-                    href={c.map}
-                    download={`nisar-change-${c.a!.date}-${c.b!.date}.png`}
-                  />
-                }
-              >
-                <DownloadIcon data-icon="inline-start" />
-                PNG
-              </Button>
+              <PngDownload
+                href={c.map}
+                name={`nisar-change-${c.a!.date}-${c.b!.date}.png`}
+              />
             )}
           </div>
           <Drivers drivers={drivers} />
@@ -231,7 +219,7 @@ export function MeasuredCover({
           </p>
         </>
       )}
-    </div>
+    </MeasuredShell>
   )
 }
 

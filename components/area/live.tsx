@@ -1,20 +1,27 @@
 "use client"
 
+import type * as React from "react"
 import { CheckIcon, CloudRainIcon, TentIcon, UsersIcon } from "lucide-react"
 
 import { Tip } from "@/components/tip"
 import type { HistoryEvent, Warning } from "@/lib/area"
 import { cn } from "@/lib/utils"
 
-const until = (iso: string) =>
-  new Intl.DateTimeFormat("en-GB", {
-    day: "numeric",
-    month: "short",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-    timeZone: "Asia/Kuala_Lumpur",
-  }).format(new Date(`${iso.replace(" ", "T")}+08:00`))
+const UNTIL = new Intl.DateTimeFormat("en-GB", {
+  day: "numeric",
+  month: "short",
+  hour: "2-digit",
+  minute: "2-digit",
+  hour12: false,
+  timeZone: "Asia/Kuala_Lumpur",
+})
+
+/** MetMalaysia times are local and zone-less ("2025-11-14 18:00:00"). */
+function until(local: string) {
+  const date = new Date(`${local.replace(" ", "T")}+08:00`)
+  // An unexpected format would make format() throw; show it as given.
+  return Number.isNaN(date.getTime()) ? local : UNTIL.format(date)
+}
 
 function evacuees(centres: HistoryEvent[]) {
   return centres

@@ -63,9 +63,10 @@ const boxPolygon = ([w, s, e, n]: Bbox): Ring[] => [
 ]
 
 export async function populationOf(box: Bbox, boundary: string | null) {
-  const key = boundary ?? box.join(",")
+  const rings = await ringsFor(boundary)
+  // By outline when there is one; an unknown key falls back to the box.
+  const key = rings?.length ? boundary! : box.join(",")
   return cache.get(key, async () => {
-    const rings = await ringsFor(boundary)
     const coordinates = rings?.length ? polygonOf(rings) : boxPolygon(box)
     const geojson = {
       type: "FeatureCollection",

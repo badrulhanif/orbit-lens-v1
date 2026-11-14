@@ -76,6 +76,7 @@ export function PlaceSearch({
   const request = React.useRef<AbortController | null>(null)
   // Answers we've already had, so backspacing or retyping is instant.
   const cache = React.useRef(new Map<string, SearchResponse>())
+  const eventsRequest = React.useRef(0)
 
   React.useEffect(
     () => () => {
@@ -106,6 +107,7 @@ export function PlaceSearch({
     const where = at
       ? `&lat=${at.latitude.toFixed(3)}&lon=${at.longitude.toFixed(3)}`
       : ""
+    const id = ++eventsRequest.current
     setEventsLoading(true)
     fetch(`/api/hazards?hazard=${intent.hazard}${where}`)
       .then((res) => (res.ok ? res.json() : { events: [] }))
@@ -116,7 +118,8 @@ export function PlaceSearch({
         setData((d) => (d?.intent?.hazard === intent.hazard ? withEvents : d))
       })
       .catch(() => {})
-      .finally(() => setEventsLoading(false))
+      // An older, slower load mustn't hide a newer one's spinner.
+      .finally(() => id === eventsRequest.current && setEventsLoading(false))
   }
 
   function fetchSuggestions(q: string, submit = false) {
@@ -141,9 +144,10 @@ export function PlaceSearch({
     if (submit) {
       fetch(url("&submit=1"), { signal })
         .then(async (res) => {
+          // Check first: an error page may not be JSON at all.
+          if (!res.ok) throw new Error("Search failed.")
           const body = (await res.json()) as SearchResponse
           const best = body.places?.[0]
-          if (!res.ok) throw new Error("Search failed.")
           if (best && !body.intent) {
             setData(body)
             setOpen(false)
@@ -188,6 +192,8 @@ export function PlaceSearch({
         // The online search being down only matters if nothing matched.
         setNeedsSubmit(!online.ok && !merged.places.length)
         setData(merged)
+        // Keep the highlighted row only if it still exists.
+        setActive((i) => (i < merged.places.length ? i : -1))
       })
       .catch(fail(signal))
       .finally(() => !signal.aborted && setLoading(false))

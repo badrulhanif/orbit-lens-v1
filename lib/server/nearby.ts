@@ -6,6 +6,7 @@ import {
   type Rings,
 } from "@/lib/server/boundaries"
 import { adminAreasAt, nearestTown } from "@/lib/server/gazetteer"
+import { plainName } from "@/lib/server/regions"
 
 /**
  * The district around a (rounded) location, for "Nearby me": the user sees
@@ -15,13 +16,6 @@ import { adminAreasAt, nearestTown } from "@/lib/server/gazetteer"
  */
 
 const CITY_STATES = new Set(["Kuala Lumpur", "Putrajaya", "Labuan"])
-
-/** "Daerah Keluang" → "Keluang", "Tenom District" → "Tenom". */
-const plainName = (name: string) =>
-  name
-    .replace(/^(Daerah|Daerha|W\.?P\.?)\s+/i, "")
-    .replace(/\s+District$/i, "")
-    .replace(/\s*\(.*\)$/, "")
 
 function ringsBox(rings: Rings): Bbox {
   const b: Bbox = [180, 90, -180, -90]
@@ -57,8 +51,11 @@ export async function nearbyArea(
   longitude: number
 ): Promise<Place | null> {
   const p = { latitude, longitude }
-  const boundaries = await loadBoundaries()
-  const admin = await adminAreasAt(latitude, longitude)
+  const [boundaries, admin, holdingAll] = await Promise.all([
+    loadBoundaries(),
+    adminAreasAt(latitude, longitude),
+    boundariesAt(p),
+  ])
   // Prefer the gazetteer's land-only box for framing.
   const frame = (key: string, rings: Rings | null) => {
     const [kind, name] = key.split("|")
@@ -68,7 +65,7 @@ export async function nearbyArea(
     )
   }
 
-  const holding = (await boundariesAt(p)).filter((k) => k.endsWith("Malaysia"))
+  const holding = holdingAll.filter((k) => k.endsWith("Malaysia"))
   const containing = (kind: "district" | "state") => {
     const key = holding.find((k) => k.startsWith(`${kind}|`))
     return key ? ([key, boundaries[key]!] as const) : undefined

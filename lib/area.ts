@@ -112,11 +112,13 @@ export function areaBoxFor(place: Place): Bbox {
   if (place.bbox) return place.bbox
   const r = radiusFor(place.zoom)
   const rx = r / Math.max(0.2, Math.cos((place.latitude * Math.PI) / 180))
+  // Kept on the globe: near the antimeridian or a pole, an unclamped box
+  // (e.g. east 180.05) is refused by the data sources and the radar service.
   return [
-    place.longitude - rx,
-    place.latitude - r,
-    place.longitude + rx,
-    place.latitude + r,
+    Math.max(-180, place.longitude - rx),
+    Math.max(-90, place.latitude - r),
+    Math.min(180, place.longitude + rx),
+    Math.min(90, place.latitude + r),
   ]
 }
 
@@ -134,9 +136,9 @@ export function formatEventDate(iso: string | null) {
   const d = new Date(iso)
   if (Number.isNaN(d.getTime())) return "Date unknown"
   return new Intl.DateTimeFormat("en-GB", {
-    // "YYYY-MM": only the month is known.
+    // "YYYY-MM": only the month is known; "YYYY": only the year.
     day: iso.length > 7 ? "numeric" : undefined,
-    month: "short",
+    month: iso.length > 4 ? "short" : undefined,
     year: "numeric",
     timeZone: "UTC",
   }).format(d)

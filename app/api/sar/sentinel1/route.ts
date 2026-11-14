@@ -1,7 +1,7 @@
 import type { NextRequest } from "next/server"
 
 import { sentinel1Days } from "@/lib/server/sentinel1"
-import { parseBbox } from "@/lib/server/util"
+import { isDay, parseBbox } from "@/lib/server/util"
 
 /**
  * Sentinel-1 (C-band) days over an area, nearest to a date first.
@@ -11,7 +11,7 @@ export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams
   const box = parseBbox(params)
   const near = params.get("near") ?? ""
-  if (!box || !/^\d{4}-\d{2}-\d{2}$/.test(near)) {
+  if (!box || !isDay(near)) {
     return Response.json({ error: "Invalid area or date." }, { status: 400 })
   }
   try {

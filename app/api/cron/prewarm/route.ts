@@ -16,6 +16,7 @@ import {
   measureTrend,
 } from "@/lib/server/measured"
 import { coverageForArea } from "@/lib/server/nisar"
+import { within } from "@/lib/server/util"
 
 export const maxDuration = 300
 
@@ -41,13 +42,15 @@ export async function GET(request: NextRequest) {
   }
   const started = Date.now()
   const left = () => BUDGET_MS - (Date.now() - started)
-  const within = <T>(p: Promise<T>) =>
-    Promise.race([
-      p.then(() => "done" as const).catch(() => "failed" as const),
-      new Promise<"still running">((r) =>
-        setTimeout(() => r("still running"), Math.max(1000, left()))
+  const status = <T>(p: Promise<T>) =>
+    within(
+      p.then(
+        () => "done" as const,
+        () => "failed" as const
       ),
-    ])
+      Math.max(1000, left()),
+      "still running" as const
+    )
 
   const states = (await malaysianStates()).sort((a, b) =>
     a.name.localeCompare(b.name)
@@ -67,7 +70,7 @@ export async function GET(request: NextRequest) {
     const r: Record<string, string> = {}
     report[state.name] = r
     const bbox = round(state.bbox as Bbox)
-    r.history = await within(areaHistory(bbox, state.boundaryKey))
+    r.history = await status(areaHistory(bbox, state.boundaryKey))
     if (!measuredEnabled()) continue
 
     const area = analysisBox(bbox)
@@ -80,9 +83,9 @@ export async function GET(request: NextRequest) {
     if (movement?.cycles.length) {
       const { latest, trend } = movementGranules(movement.cycles, area)
       if (latest.length)
-        r.movement = await within(measurePair(ids(latest), box))
+        r.movement = await status(measurePair(ids(latest), box))
       if (trend.length > 1)
-        r.trend = await within(measureTrend(ids(trend), box))
+        r.trend = await status(measureTrend(ids(trend), box))
     }
     if (signal?.cycles.length) {
       // Flood and farmland compare with the previous pass; forest with the
@@ -90,7 +93,7 @@ export async function GET(request: NextRequest) {
       for (const baseline of ["previous", "earliest"] as const) {
         const { before, after } = coverGranules(signal.cycles, area, baseline)
         if (before.length && after.length)
-          r[`cover-${baseline}`] = await within(
+          r[`cover-${baseline}`] = await status(
             measureCover(ids(before), ids(after), box, state.boundaryKey)
           )
       }

@@ -7,7 +7,13 @@
 //
 // Run: node scripts/build-gazetteer.mjs   (needs `unzip` on the PATH)
 import { execFileSync } from "node:child_process"
-import { mkdirSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs"
+import {
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from "node:fs"
 import { tmpdir } from "node:os"
 import { dirname, join } from "node:path"
 import { fileURLToPath } from "node:url"
@@ -198,4 +204,5 @@ writeFileSync(
     rows: out,
   })
 )
+rmSync(work, { recursive: true, force: true }) // the GeoNames downloads
 console.log(`wrote data/gazetteer.json with ${out.length} places`)
