@@ -252,10 +252,10 @@ export const STORIES: Story[] = [
       "RCM 18 July 2020 · NISAR 3 July → 31 October 2026 · 964 km² measured",
     place: {
       id: "case-masamba",
-      name: "Masamba, Indonesia",
+      name: "Masamba",
       kind: "Town",
       icon: "area",
-      area: "North Luwu, South Sulawesi, Indonesia",
+      area: "South Sulawesi, Indonesia",
       address: "",
       latitude: -2.547,
       longitude: 120.326,

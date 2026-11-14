@@ -26,10 +26,10 @@ const KLANG_VALLEY: Place = {
  * July 2020 flash flood (see lib/rcm.ts). */
 const MASAMBA: Place = {
   id: "case-masamba",
-  name: "Masamba, Indonesia",
+  name: "Masamba",
   kind: "Town",
   icon: "area",
-  area: "North Luwu, South Sulawesi, Indonesia",
+  area: "South Sulawesi, Indonesia",
   address: "",
   latitude: -2.547,
   longitude: 120.326,
@@ -81,7 +81,7 @@ export function CaseStudies({
     <section
       aria-label="Case studies"
       className={cn(
-        "grid gap-1 rounded-2xl bg-background/90 p-2 shadow-lg ring-1 shadow-black/10 ring-foreground/10 backdrop-blur-xl",
+        "grid grid-cols-[minmax(0,1fr)] gap-1 rounded-2xl bg-background/90 p-2 shadow-lg ring-1 shadow-black/10 ring-foreground/10 backdrop-blur-xl",
         className
       )}
     >
@@ -114,9 +114,9 @@ export function CaseStudies({
               </span>
             </span>
             {busy === c.place ? (
-              <LoaderCircleIcon className="size-4 animate-spin text-muted-foreground" />
+              <LoaderCircleIcon className="size-4 shrink-0 animate-spin text-muted-foreground" />
             ) : (
-              <ChevronRightIcon className="size-4 text-muted-foreground" />
+              <ChevronRightIcon className="size-4 shrink-0 text-muted-foreground" />
             )}
           </button>
         )
@@ -127,7 +127,7 @@ export function CaseStudies({
       >
         <BookOpenIcon className="size-3.5" />
         Read what we found
-        <ChevronRightIcon className="ml-auto size-4" />
+        <ChevronRightIcon className="ml-auto size-4 shrink-0" />
       </Link>
     </section>
   )
